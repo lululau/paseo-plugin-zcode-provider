@@ -1785,7 +1785,21 @@ export class ZCodeSession {
     }
     const modeId = requireMode(snapshot.settings.mode.current);
     const previousModeId = this.snapshot.settings.mode.current;
-    this.snapshot = snapshot;
+    // Subscription snapshots can temporarily omit models that create/resume
+    // already advertised. Keep the union so setModel still accepts catalog IDs.
+    this.snapshot = {
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        model: {
+          ...snapshot.settings.model,
+          available: mergeModelOptions(
+            this.snapshot.settings.model.available,
+            snapshot.settings.model.available,
+          ),
+        },
+      },
+    };
     this.snapshotRevision += 1;
     const usage = this.readContextUsage(snapshot);
     if (
@@ -1852,6 +1866,29 @@ export class ZCodeSession {
       );
     }
   }
+}
+
+type ModelOption = SessionSnapshot["settings"]["model"]["available"][number];
+
+function mergeModelOptions(
+  previous: readonly ModelOption[],
+  next: readonly ModelOption[],
+): ModelOption[] {
+  const seen = new Set<string>();
+  const merged: ModelOption[] = [];
+  for (const entry of next) {
+    const id = encodeModel(entry.ref);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    merged.push(entry);
+  }
+  for (const entry of previous) {
+    const id = encodeModel(entry.ref);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    merged.push(entry);
+  }
+  return merged;
 }
 
 export async function resolveWorkspace(cwd: string): Promise<string> {

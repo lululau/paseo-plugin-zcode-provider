@@ -108,6 +108,8 @@ export class FakeBridge implements HostBridge {
 
   emitModeOnSet = false;
   collapseModelsOnSetMode = false;
+  /** Reproduce host subscribe snapshots that omit non-current models. */
+  collapseModelsOnSubscribe = false;
 
   async request<Schema extends z.ZodType>(
     method: string,
@@ -261,6 +263,25 @@ export class FakeBridge implements HostBridge {
   ): Promise<HostSubscription> {
     this.calls.push({ method: "subscribe", params: null });
     this.handler = handler;
+    if (this.collapseModelsOnSubscribe) {
+      const current = this.current.settings.model.current;
+      this.current = {
+        ...this.current,
+        settings: {
+          ...this.current.settings,
+          model: {
+            ...this.current.settings.model,
+            available: this.current.settings.model.available.filter(
+              (entry) =>
+                entry.ref.providerId === current.providerId &&
+                entry.ref.modelId === current.modelId &&
+                (entry.ref.variant ?? null) === (current.variant ?? null),
+            ),
+          },
+        },
+      };
+      await this.emit({ type: "snapshot", snapshot: this.current });
+    }
     await this.emitConversation();
     return {
       dispose: async () => {

@@ -69,7 +69,11 @@ it("closes native generation when the stop RPC fails", async () => {
   expect(host.closed).toBe(true);
 });
 
-async function fixture() {
+async function fixture(
+  options: {
+    prepareHost?: (host: FakeBridge) => void;
+  } = {},
+) {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "zcode-plugin-test-")),
   );
@@ -80,6 +84,7 @@ async function fixture() {
   const registration = createZCodeProvider(async (env) => {
     environments.push(env);
     const host = new FakeBridge(snapshot(cwd));
+    options.prepareHost?.(host);
     hosts.push(host);
     return host;
   }, store);
@@ -277,6 +282,41 @@ it("opens with environment and MCP, sets model before modes, and returns persist
     },
     { name: "review", description: "Review", argumentHint: "<path>" },
   ]);
+});
+
+it("keeps non-default models selectable when subscribe snapshots truncate available", async () => {
+  const f = await fixture({
+    prepareHost(host) {
+      host.current.settings.model.available = [
+        {
+          ref: { providerId: "provider", modelId: "model" },
+          label: "Model",
+          providerLabel: "Provider",
+        },
+        {
+          ref: { providerId: "builtin:bigmodel-coding-plan", modelId: "GLM-5.3-Flash" },
+          label: "GLM-5.3-Flash",
+          providerLabel: "BigModel",
+        },
+      ];
+      host.collapseModelsOnSubscribe = true;
+    },
+  });
+  const host = await f.open({
+    model: '["builtin:bigmodel-coding-plan","GLM-5.3-Flash",null]',
+  });
+  expect(
+    host.calls.find((call) => call.method === "setModel")?.params,
+  ).toMatchObject({
+    model: {
+      providerId: "builtin:bigmodel-coding-plan",
+      modelId: "GLM-5.3-Flash",
+    },
+  });
+  expect(host.current.settings.model.current).toEqual({
+    providerId: "builtin:bigmodel-coding-plan",
+    modelId: "GLM-5.3-Flash",
+  });
 });
 
 it.each(["permission", "question"] as const)(
