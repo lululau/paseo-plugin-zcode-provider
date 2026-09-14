@@ -581,23 +581,28 @@ export class ZCodeSession {
       );
     }
     const model = decodeModel(modelId);
-    const available = new Set(
-      this.snapshot.settings.model.available.map((entry) =>
-        encodeModel(entry.ref),
-      ),
+    const entry = this.snapshot.settings.model.available.find(
+      (candidate) => encodeModel(candidate.ref) === modelId,
     );
-    if (!available.has(modelId)) {
+    if (!entry) {
       throw new AdapterError(
         "INVALID_CONFIGURATION",
         `Unknown ZCode model: ${modelId}`,
       );
     }
+    // ZCode 3.12+ requires options.reasoningLevel on setModel.
+    const reasoningLevel = resolveReasoningLevel(
+      this.snapshot.settings,
+      entry,
+    );
     const snapshot = await this.bridge.request(
       "setModel",
       {
         workspacePath: this.workspace,
         sessionId: this.id,
-        model,
+        model: reasoningLevel
+          ? { ...model, options: { reasoningLevel } }
+          : model,
         persistAsWorkspaceLastUsed: true,
       },
       SessionSnapshotSchema,
@@ -1920,6 +1925,53 @@ export function assertSnapshotWorkspace(
   }
 }
 
+function isMissingNativeMethod(error: unknown, method: string): boolean {
+  if (!(error instanceof AdapterError)) return false;
+  if (error.code !== "NATIVE_PROTOCOL_ERROR") return false;
+  return error.message.includes(`Method not found: ${method}`);
+}
+
+function resolveReasoningLevel(
+  settings: SessionSettings,
+  entry: SessionSettings["model"]["available"][number],
+): string | undefined {
+  const levels = readReasoningLevels(entry);
+  const currentThought = settings.thoughtLevel.current;
+  if (currentThought && levels?.includes(currentThought)) return currentThought;
+  const currentOptions = settings.model.current as {
+    options?: { reasoningLevel?: unknown };
+  };
+  const currentLevel = currentOptions.options?.reasoningLevel;
+  if (typeof currentLevel === "string" && levels?.includes(currentLevel)) {
+    return currentLevel;
+  }
+  const defaults = entry as {
+    reasoning?: { defaultLevel?: unknown };
+  };
+  if (
+    typeof defaults.reasoning?.defaultLevel === "string" &&
+    (!levels || levels.includes(defaults.reasoning.defaultLevel))
+  ) {
+    return defaults.reasoning.defaultLevel;
+  }
+  return levels?.[0];
+}
+
+function readReasoningLevels(
+  entry: SessionSettings["model"]["available"][number],
+): string[] | undefined {
+  const reasoning = (entry as { reasoning?: { levels?: unknown } }).reasoning;
+  if (!Array.isArray(reasoning?.levels)) return undefined;
+  const levels = reasoning.levels
+    .map((level) =>
+      level && typeof level === "object" && "value" in level
+        ? String((level as { value: unknown }).value)
+        : undefined,
+    )
+    .filter((level): level is string => !!level);
+  return levels.length > 0 ? levels : undefined;
+}
+
 export async function initializeWorkspace(
   bridge: HostBridge,
   workspace: string,
@@ -1938,26 +1990,62 @@ export async function initializeWorkspace(
       initialized.reason ?? "ZCode host is unavailable",
     );
   }
-  const state = await bridge.request(
-    "readWorkspaceState",
-    { workspacePath: workspace },
-    WorkspaceStateResultSchema,
+  try {
+    const state = await bridge.request(
+      "readWorkspaceState",
+      { workspacePath: workspace },
+      WorkspaceStateResultSchema,
+      60_000,
+    );
+    if (state.workspace.workspacePath !== workspace) {
+      throw new AdapterError(
+        "INVALID_WORKSPACE",
+        "ZCode initialized a different workspace",
+      );
+    }
+    if ((state.modelCatalog?.providers.length ?? 0) === 0) {
+      throw new AdapterError(
+        "AUTH_REQUIRED",
+        "No usable ZCode model provider is configured",
+      );
+    }
+    return state.settings;
+  } catch (error) {
+    // ZCode 3.12+ removed readWorkspaceState from the agent service.
+    if (!isMissingNativeMethod(error, "readWorkspaceState")) throw error;
+  }
+  const snapshot = await bridge.request(
+    "createSession",
+    {
+      workspacePath: workspace,
+      persistence: "deferred",
+      mcpServers: [],
+    },
+    SessionSnapshotSchema,
     60_000,
   );
-  if (state.workspace.workspacePath !== workspace) {
-    throw new AdapterError(
-      "INVALID_WORKSPACE",
-      "ZCode initialized a different workspace",
-    );
+  try {
+    assertSnapshotWorkspace(snapshot, workspace);
+    if (snapshot.settings.model.available.length === 0) {
+      throw new AdapterError(
+        "AUTH_REQUIRED",
+        "No usable ZCode model provider is configured",
+      );
+    }
+    SessionSettingsSchema.parse(snapshot.settings);
+    return snapshot.settings;
+  } finally {
+    await bridge
+      .request(
+        "closeSession",
+        {
+          workspacePath: workspace,
+          sessionId: snapshot.session.sessionId,
+        },
+        UnknownResultSchema,
+      )
+      .catch(() => undefined);
   }
-  if ((state.modelCatalog?.providers.length ?? 0) === 0) {
-    throw new AdapterError(
-      "AUTH_REQUIRED",
-      "No usable ZCode model provider is configured",
-    );
-  }
-  SessionSettingsSchema.parse(state.settings);
-  return state.settings;
 }
 
 function safeError(error: unknown): string {

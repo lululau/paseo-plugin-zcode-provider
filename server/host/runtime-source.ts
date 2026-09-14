@@ -211,11 +211,23 @@ worker.on("exit", code => {
   if (!shuttingDown) process.exit(code === 0 ? 1 : code);
 });
 
+const builtinProviderConfigFilePath =
+  process.env.PASEO_ZCODE_BUILTIN_PROVIDER_CONFIG_FILE?.trim() ||
+  process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE?.trim();
+if (!builtinProviderConfigFilePath) {
+  throw new Error(
+    "Missing ZCode builtin provider config path (PASEO_ZCODE_BUILTIN_PROVIDER_CONFIG_FILE)",
+  );
+}
+
 worker.postMessage({
   data: {
     type: "init-local",
     deviceMid: "paseo-zcode-provider",
-    agentSpawnFallbackCwd: process.cwd()
+    agentSpawnFallbackCwd: process.cwd(),
+    // Required by ZCode 3.12+ init-local schema; omitting it fails validation
+    // and closes the MessagePort, so every later RPC hangs until timeout.
+    zcodeBuiltinProviderConfigFilePath: builtinProviderConfigFilePath
   },
   ports: [ports.port2]
 }, [ports.port2]);

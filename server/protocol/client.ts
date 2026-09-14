@@ -264,11 +264,15 @@ export class ZCodeProtocolClient {
     clearTimeout(pending.timer);
 
     if ("error" in envelope) {
+      const nativeMessage =
+        typeof envelope.error.message === "string"
+          ? envelope.error.message.trim()
+          : "";
       pending.reject(
         diagnosticError(
           new AdapterError(
             "NATIVE_PROTOCOL_ERROR",
-            "ZCode returned a native error",
+            nativeMessage || "ZCode returned a native error",
           ),
           {
             ...this.diagnostic,
