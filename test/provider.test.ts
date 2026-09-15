@@ -294,7 +294,10 @@ it("keeps non-default models selectable when subscribe snapshots truncate availa
           providerLabel: "Provider",
         },
         {
-          ref: { providerId: "builtin:bigmodel-coding-plan", modelId: "GLM-5.3-Flash" },
+          ref: {
+            providerId: "builtin:bigmodel-coding-plan",
+            modelId: "GLM-5.3-Flash",
+          },
           label: "GLM-5.3-Flash",
           providerLabel: "BigModel",
         },
@@ -672,11 +675,67 @@ it("publishes tool replacements, questions, and context usage without duplicatin
       e.type === "timeline.item" && e.item.type === "tool_call",
   );
   expect(tools.map((e) => e.item)).toMatchObject([
-    { id: "tool:read", status: "running" },
+    {
+      id: "tool:read",
+      status: "running",
+      detail: { type: "read", filePath: "a.txt" },
+    },
     {
       id: "tool:read",
       status: "completed",
-      detail: { input: { file: "a.txt" }, output: "contents" },
+      detail: { type: "read", filePath: "a.txt", content: "contents" },
+    },
+  ]);
+  for (const [index, payload] of [
+    {
+      kind: "started",
+      toolCallId: "bash-1",
+      toolName: "bash",
+      input: { command: "echo hello", description: "greet" },
+    },
+    {
+      kind: "result",
+      toolCallId: "bash-1",
+      result: {
+        success: true,
+        content: "hello\n",
+        perf: { detail: { command: { exitCode: 0 } } },
+      },
+    },
+  ].entries())
+    await host.emit({
+      type: "session.event",
+      event: {
+        type: "tool.updated",
+        eventId: `tool-bash-${index}`,
+        sessionId: "session-1",
+        seq: index + 10,
+        timestamp: 1,
+        deliveryKind: "desktop-continuous",
+        payload,
+      },
+    });
+  const bashTools = f.events.filter(
+    (e): e is Extract<ProviderEvent, { type: "timeline.item" }> =>
+      e.type === "timeline.item" &&
+      e.item.type === "tool_call" &&
+      e.item.callId === "bash-1",
+  );
+  expect(bashTools.map((e) => e.item)).toMatchObject([
+    {
+      id: "tool:bash-1",
+      status: "running",
+      detail: { type: "shell", command: "echo hello" },
+    },
+    {
+      id: "tool:bash-1",
+      status: "completed",
+      detail: {
+        type: "shell",
+        command: "echo hello",
+        output: "hello\n",
+        exitCode: 0,
+      },
     },
   ]);
   await host.emit({

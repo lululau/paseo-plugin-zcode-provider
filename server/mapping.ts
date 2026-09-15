@@ -13,6 +13,7 @@ import type {
   ProviderToolCallDetail,
 } from "@getpaseo/plugin/server/provider";
 import { AdapterError } from "./errors.js";
+import { mapToolDetail } from "./tool-detail.js";
 import type {
   PermissionRequest,
   SessionSettings,
@@ -380,11 +381,11 @@ export function historyTimeline(
           );
         }
         const output = jsonValue(state.output ?? state.error ?? null);
-        const detail: ProviderToolCallDetail = {
-          type: "unknown",
-          input: jsonValue(state.input ?? null),
-          output,
-        };
+        const detail: ProviderToolCallDetail = mapToolDetail(
+          name,
+          state.input,
+          state.output ?? state.error,
+        );
         append(
           status === "failed"
             ? { type: "tool_call", callId, name, detail, status, error: output }

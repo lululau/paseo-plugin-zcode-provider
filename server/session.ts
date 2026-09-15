@@ -24,6 +24,7 @@ import type {
 import { AdapterError } from "./errors.js";
 import type { HostBridge, HostSubscription } from "./host/bridge.js";
 import type { Logger } from "./logger.js";
+import { mapToolDetail } from "./tool-detail.js";
 import {
   catalogModels,
   decodeModel,
@@ -591,10 +592,7 @@ export class ZCodeSession {
       );
     }
     // ZCode 3.12+ requires options.reasoningLevel on setModel.
-    const reasoningLevel = resolveReasoningLevel(
-      this.snapshot.settings,
-      entry,
-    );
+    const reasoningLevel = resolveReasoningLevel(this.snapshot.settings, entry);
     const snapshot = await this.bridge.request(
       "setModel",
       {
@@ -1315,11 +1313,11 @@ export class ZCodeSession {
       status: "running" | "completed" | "failed";
     },
   ): void {
-    const detail: ProviderToolCallDetail = {
-      type: "unknown",
-      input: jsonValue(tool.input),
-      output: jsonValue(tool.output),
-    };
+    const detail: ProviderToolCallDetail = mapToolDetail(
+      tool.name,
+      tool.input,
+      tool.output,
+    );
     const item: NativeTimelineItem =
       tool.status === "failed"
         ? {
@@ -1489,11 +1487,7 @@ export class ZCodeSession {
         actions,
         ...(markdown === undefined
           ? {
-              detail: {
-                type: "unknown",
-                input: jsonValue(request.input),
-                output: null,
-              },
+              detail: mapToolDetail(request.toolName, request.input, null),
             }
           : {
               metadata: {
