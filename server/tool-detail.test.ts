@@ -51,13 +51,13 @@ describe("mapToolDetail", () => {
     });
   });
 
-  it("maps file read tool (view_file / read_file) to read detail", () => {
+  it("maps file read tool (Read / view_file) to read detail", () => {
     const detail = mapToolDetail(
-      "view_file",
+      "Read",
       {
-        AbsolutePath: "/path/to/file.ts",
-        StartLine: 1,
-        EndLine: 50,
+        file_path: "/path/to/file.ts",
+        offset: 1,
+        limit: 50,
       },
       {
         content: "const a = 1;\nconst b = 2;\n",
@@ -73,13 +73,13 @@ describe("mapToolDetail", () => {
     });
   });
 
-  it("maps file edit tool (replace_file_content) to edit detail", () => {
+  it("maps file edit tool (Edit) with old_string / new_string to edit detail", () => {
     const detail = mapToolDetail(
-      "replace_file_content",
+      "Edit",
       {
-        TargetFile: "/src/index.ts",
-        TargetContent: "const x = 1;",
-        ReplacementContent: "const x = 2;",
+        path: "/src/index.ts",
+        old_string: "const x = 1;",
+        new_string: "const x = 2;",
       },
       "File edited successfully",
     );
@@ -92,12 +92,12 @@ describe("mapToolDetail", () => {
     });
   });
 
-  it("maps file write tool (write_to_file) to write detail", () => {
+  it("maps file write tool (Write) to write detail", () => {
     const detail = mapToolDetail(
-      "write_to_file",
+      "Write",
       {
-        TargetFile: "/src/new.ts",
-        CodeContent: "export const ok = true;\n",
+        path: "/src/new.ts",
+        content: "export const ok = true;\n",
       },
       "File created",
     );
@@ -109,32 +109,31 @@ describe("mapToolDetail", () => {
     });
   });
 
-  it("maps search / grep tool to search detail", () => {
+  it("maps WebSearch tool to search detail", () => {
     const detail = mapToolDetail(
-      "grep_search",
+      "WebSearch",
       {
-        Query: "function test",
+        query: "Paseo protocol",
       },
       {
-        content: "src/index.ts:1:function test() {}",
-        filePaths: ["src/index.ts"],
+        results: [{ title: "Paseo Home", url: "https://getpaseo.ai" }],
       },
     );
 
     expect(detail).toEqual({
       type: "search",
-      query: "function test",
-      toolName: "grep",
-      content: "src/index.ts:1:function test() {}",
-      filePaths: ["src/index.ts"],
+      query: "Paseo protocol",
+      toolName: "web_search",
+      webResults: [{ title: "Paseo Home", url: "https://getpaseo.ai" }],
     });
   });
 
-  it("maps fetch / read_url_content tool to fetch detail", () => {
+  it("maps WebFetch and web reader tools to fetch detail", () => {
     const detail = mapToolDetail(
-      "read_url_content",
+      "WebFetch",
       {
-        Url: "https://example.com",
+        url: "https://example.com",
+        prompt: "Summarize the page",
       },
       {
         content: "# Example Domain\nThis domain is for use in examples.",
@@ -145,8 +144,127 @@ describe("mapToolDetail", () => {
     expect(detail).toEqual({
       type: "fetch",
       url: "https://example.com",
+      prompt: "Summarize the page",
       result: "# Example Domain\nThis domain is for use in examples.",
       code: 200,
+    });
+  });
+
+  it("maps Agent tool to sub_agent detail", () => {
+    const detail = mapToolDetail(
+      "Agent",
+      {
+        subagent_type: "Explore",
+        description: "Search codebase for provider schemas",
+      },
+      {
+        content: "Exploration completed",
+        child_session_id: "child-123",
+      },
+    );
+
+    expect(detail).toEqual({
+      type: "sub_agent",
+      subAgentType: "Explore",
+      description: "Search codebase for provider schemas",
+      childSessionId: "child-123",
+      log: "Exploration completed",
+    });
+  });
+
+  it("maps ExitPlanMode to plan detail", () => {
+    const detail = mapToolDetail(
+      "ExitPlanMode",
+      {
+        plan: "# My Implementation Plan\n- step 1\n- step 2",
+      },
+      null,
+    );
+
+    expect(detail).toEqual({
+      type: "plan",
+      text: "# My Implementation Plan\n- step 1\n- step 2",
+    });
+  });
+
+  it("maps Skill tool to plain_text detail", () => {
+    const detail = mapToolDetail(
+      "Skill",
+      {
+        name: "wrap",
+        prompt: "Commit and journal",
+      },
+      "Skill executed",
+    );
+
+    expect(detail).toEqual({
+      type: "plain_text",
+      icon: "sparkles",
+      label: "Skill: wrap",
+      text: "Commit and journal",
+    });
+  });
+
+  it("maps SendMessage tool to plain_text detail", () => {
+    const detail = mapToolDetail(
+      "SendMessage",
+      {
+        to: "Explore",
+        message: "Please inspect mapping.ts",
+      },
+      "Sent",
+    );
+
+    expect(detail).toEqual({
+      type: "plain_text",
+      icon: "bot",
+      label: "Message to Agent (Explore)",
+      text: "Please inspect mapping.ts",
+    });
+  });
+
+  it("maps TodoWrite tool to plain_text detail", () => {
+    const detail = mapToolDetail(
+      "TodoWrite",
+      {
+        todos: [
+          { content: "Task 1", status: "completed" },
+          { content: "Task 2", status: "pending" },
+        ],
+      },
+      "Updated",
+    );
+
+    expect(detail).toEqual({
+      type: "plain_text",
+      icon: "sparkles",
+      label: "Update Todo List",
+      text: JSON.stringify(
+        [
+          { content: "Task 1", status: "completed" },
+          { content: "Task 2", status: "pending" },
+        ],
+        null,
+        2,
+      ),
+    });
+  });
+
+  it("maps CronCreate tool to plain_text detail", () => {
+    const detail = mapToolDetail(
+      "CronCreate",
+      {
+        cron: "0 9 * * *",
+        prompt: "Check daily status",
+      },
+      "Created",
+    );
+
+    expect(detail).toEqual({
+      type: "plain_text",
+      icon: "wrench",
+      label: "CronCreate",
+      text: "0 9 * * * - Check daily status",
     });
   });
 

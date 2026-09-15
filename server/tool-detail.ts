@@ -61,6 +61,7 @@ function parseShellDetail(
     cwd =
       extractString(rec.cwd) ??
       extractString(rec.workingDir) ??
+      extractString(rec.working_dir) ??
       extractString(rec.workingDirectory);
   }
 
@@ -85,8 +86,9 @@ function parseReadDetail(
   if (input === null || typeof input !== "object") return undefined;
   const rec = input as Record<string, unknown>;
   const filePath =
-    extractString(rec.filePath) ??
     extractString(rec.path) ??
+    extractString(rec.file_path) ??
+    extractString(rec.filePath) ??
     extractString(rec.file) ??
     extractString(rec.filename) ??
     extractString(rec.AbsolutePath) ??
@@ -122,8 +124,9 @@ function parseEditDetail(
   if (input === null || typeof input !== "object") return undefined;
   const rec = input as Record<string, unknown>;
   const filePath =
-    extractString(rec.filePath) ??
     extractString(rec.path) ??
+    extractString(rec.file_path) ??
+    extractString(rec.filePath) ??
     extractString(rec.file) ??
     extractString(rec.filename) ??
     extractString(rec.TargetFile) ??
@@ -132,12 +135,14 @@ function parseEditDetail(
   if (!filePath) return undefined;
 
   const oldString =
+    extractString(rec.old_string) ??
     extractString(rec.oldString) ??
     extractString(rec.old_str) ??
     extractString(rec.oldStr) ??
     extractString(rec.TargetContent) ??
     extractString(rec.targetContent);
   const newString =
+    extractString(rec.new_string) ??
     extractString(rec.newString) ??
     extractString(rec.new_str) ??
     extractString(rec.newStr) ??
@@ -164,8 +169,9 @@ function parseWriteDetail(
   if (input === null || typeof input !== "object") return undefined;
   const rec = input as Record<string, unknown>;
   const filePath =
-    extractString(rec.filePath) ??
     extractString(rec.path) ??
+    extractString(rec.file_path) ??
+    extractString(rec.filePath) ??
     extractString(rec.file) ??
     extractString(rec.filename) ??
     extractString(rec.TargetFile) ??
@@ -205,19 +211,22 @@ function parseSearchDetail(
 
   let toolName: "search" | "grep" | "glob" | "web_search" = "search";
   const lower = name.toLowerCase();
-  if (lower.includes("grep")) toolName = "grep";
-  else if (
+  if (lower.includes("web") || lower === "websearch") {
+    toolName = "web_search";
+  } else if (lower.includes("grep")) {
+    toolName = "grep";
+  } else if (
     lower.includes("find_by_name") ||
     lower.includes("glob") ||
     lower.includes("list_dir")
   ) {
     toolName = "glob";
-  } else if (lower.includes("web") || lower.includes("search_web")) {
-    toolName = "web_search";
   }
 
   const content = extractTextOutput(output);
   let filePaths: string[] | undefined;
+  let webResults: Array<{ title: string; url: string }> | undefined;
+
   if (output !== null && typeof output === "object") {
     const outRec = output as Record<string, unknown>;
     if (Array.isArray(outRec.filePaths)) {
@@ -229,6 +238,24 @@ function parseSearchDetail(
         (p): p is string => typeof p === "string",
       );
     }
+    if (Array.isArray(outRec.results) || Array.isArray(outRec.webResults)) {
+      const arr = (outRec.results ?? outRec.webResults) as unknown[];
+      const mapped = arr
+        .map((item) => {
+          if (item && typeof item === "object") {
+            const i = item as Record<string, unknown>;
+            if (typeof i.url === "string") {
+              return {
+                title: typeof i.title === "string" ? i.title : i.url,
+                url: i.url,
+              };
+            }
+          }
+          return undefined;
+        })
+        .filter((i): i is { title: string; url: string } => i !== undefined);
+      if (mapped.length > 0) webResults = mapped;
+    }
   }
 
   return {
@@ -237,6 +264,7 @@ function parseSearchDetail(
     toolName,
     ...(content !== undefined ? { content } : {}),
     ...(filePaths !== undefined ? { filePaths } : {}),
+    ...(webResults !== undefined ? { webResults } : {}),
   };
 }
 
@@ -249,12 +277,13 @@ function parseFetchDetail(
   const url =
     extractString(rec.url) ??
     extractString(rec.Url) ??
+    extractString(rec.target_url) ??
     extractString(rec.targetUrl);
 
   if (!url) return undefined;
 
   const result = extractTextOutput(output);
-  const prompt = extractString(rec.prompt);
+  const prompt = extractString(rec.prompt) ?? extractString(rec.question);
   let code: number | undefined;
   if (output !== null && typeof output === "object") {
     const outRec = output as Record<string, unknown>;
@@ -267,6 +296,44 @@ function parseFetchDetail(
     ...(prompt !== undefined ? { prompt } : {}),
     ...(result !== undefined ? { result } : {}),
     ...(code !== undefined ? { code } : {}),
+  };
+}
+
+function parseSubAgentDetail(
+  input: unknown,
+  output: unknown,
+): ProviderToolCallDetail | undefined {
+  const rec =
+    input !== null && typeof input === "object"
+      ? (input as Record<string, unknown>)
+      : {};
+  const subAgentType =
+    extractString(rec.subagent_type) ??
+    extractString(rec.subAgentType) ??
+    extractString(rec.type);
+  const description =
+    extractString(rec.description) ??
+    extractString(rec.prompt) ??
+    extractString(rec.task);
+
+  const outRec =
+    output !== null && typeof output === "object"
+      ? (output as Record<string, unknown>)
+      : {};
+  const childSessionId =
+    extractString(outRec.child_session_id) ??
+    extractString(outRec.childSessionId) ??
+    extractString(outRec.sessionId);
+  const log =
+    extractTextOutput(output) ??
+    (output ? JSON.stringify(output, null, 2) : "");
+
+  return {
+    type: "sub_agent",
+    log,
+    ...(subAgentType !== undefined ? { subAgentType } : {}),
+    ...(description !== undefined ? { description } : {}),
+    ...(childSessionId !== undefined ? { childSessionId } : {}),
   };
 }
 
@@ -329,11 +396,12 @@ export function mapToolDetail(
       if (writeDetail) return writeDetail;
     }
 
-    // 5. Search / Grep / Glob
+    // 5. Search / WebSearch / Grep / Glob
     if (
+      lower === "websearch" ||
+      lower.includes("search_web") ||
       lower.includes("grep") ||
       lower.includes("find_by_name") ||
-      lower.includes("search_web") ||
       lower === "search" ||
       lower === "glob"
     ) {
@@ -341,14 +409,174 @@ export function mapToolDetail(
       if (searchDetail) return searchDetail;
     }
 
-    // 6. Fetch / Read URL
+    // 6. Fetch / WebFetch / Read URL
     if (
+      lower === "webfetch" ||
       lower === "fetch" ||
       lower === "read_url_content" ||
-      lower === "http_request"
+      lower === "http_request" ||
+      lower.includes("web_reader") ||
+      lower.includes("webreader")
     ) {
       const fetchDetail = parseFetchDetail(input, output);
       if (fetchDetail) return fetchDetail;
+    }
+
+    // 7. SubAgent (Agent)
+    if (
+      lower === "agent" ||
+      lower === "subagent" ||
+      lower === "invoke_subagent"
+    ) {
+      const subAgentDetail = parseSubAgentDetail(input, output);
+      if (subAgentDetail) return subAgentDetail;
+    }
+
+    // 8. Plan Mode (ExitPlanMode / EnterPlanMode)
+    if (lower === "exitplanmode") {
+      const rec =
+        input !== null && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      const plan = extractString(rec.plan);
+      if (plan) return { type: "plan", text: plan };
+    }
+    if (lower === "enterplanmode") {
+      const rec =
+        input !== null && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      return {
+        type: "plain_text",
+        icon: "brain",
+        label: "Enter Plan Mode",
+        text: extractString(rec.reason) ?? "Entering plan mode...",
+      };
+    }
+
+    // 9. Skill
+    if (lower === "skill") {
+      const rec =
+        input !== null && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      const skillName =
+        extractString(rec.name) ??
+        extractString(rec.skill) ??
+        extractString(rec.skill_name);
+      const prompt =
+        extractString(rec.prompt) ??
+        extractString(rec.arguments) ??
+        (rec.args ? JSON.stringify(rec.args) : undefined);
+      return {
+        type: "plain_text",
+        icon: "sparkles",
+        label: skillName ? `Skill: ${skillName}` : "Skill",
+        ...(prompt !== undefined ? { text: prompt } : {}),
+      };
+    }
+
+    // 10. SendMessage
+    if (lower === "sendmessage") {
+      const rec =
+        input !== null && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      const to =
+        extractString(rec.to) ??
+        extractString(rec.recipient) ??
+        extractString(rec.subagent_id);
+      const message =
+        extractString(rec.message) ??
+        extractString(rec.content) ??
+        extractString(rec.text);
+      return {
+        type: "plain_text",
+        icon: "bot",
+        label: to ? `Message to Agent (${to})` : "Message to SubAgent",
+        ...(message !== undefined ? { text: message } : {}),
+      };
+    }
+
+    // 11. TodoWrite / TodoRead
+    if (lower === "todowrite" || lower === "todoread") {
+      const rec =
+        input !== null && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      const todos = rec.todos ?? rec.items;
+      const text =
+        typeof todos === "string"
+          ? todos
+          : todos
+            ? JSON.stringify(todos, null, 2)
+            : extractTextOutput(output);
+      return {
+        type: "plain_text",
+        icon: "sparkles",
+        label: lower === "todowrite" ? "Update Todo List" : "Read Todo List",
+        ...(text !== undefined ? { text } : {}),
+      };
+    }
+
+    // 12. TaskOutput / TaskStop
+    if (lower === "taskoutput" || lower === "taskstop") {
+      const rec =
+        input !== null && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      const taskId =
+        extractString(rec.task_id) ??
+        extractString(rec.taskId) ??
+        extractString(rec.id);
+      const text = extractTextOutput(output);
+      return {
+        type: "plain_text",
+        icon: "square_terminal",
+        label:
+          lower === "taskstop"
+            ? `Stop Task ${taskId ? `(${taskId})` : ""}`.trim()
+            : `Task Output ${taskId ? `(${taskId})` : ""}`.trim(),
+        ...(text !== undefined ? { text } : {}),
+      };
+    }
+
+    // 13. AskUserQuestion
+    if (lower === "askuserquestion") {
+      const rec =
+        input !== null && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      const question = extractString(rec.question) ?? extractString(rec.prompt);
+      return {
+        type: "plain_text",
+        icon: "mic_vocal",
+        label: "Ask Question",
+        ...(question !== undefined ? { text: question } : {}),
+      };
+    }
+
+    // 14. Cron & OffPeak Automation
+    if (lower.startsWith("cron") || lower.startsWith("offpeak")) {
+      const rec =
+        input !== null && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      const schedule =
+        extractString(rec.cron) ??
+        extractString(rec.schedule) ??
+        extractString(rec.cron_expression);
+      const task =
+        extractString(rec.prompt) ??
+        extractString(rec.command) ??
+        extractString(rec.task);
+      const summary = [schedule, task].filter(Boolean).join(" - ");
+      return {
+        type: "plain_text",
+        icon: lower.startsWith("cron") ? "wrench" : "square_terminal",
+        label: name,
+        ...(summary ? { text: summary } : {}),
+      };
     }
   } catch {
     // Fallback to unknown on parsing error
