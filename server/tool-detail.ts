@@ -5,6 +5,57 @@ function extractString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+export interface TodoWriteEntry {
+  text: string;
+  completed: boolean;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string;
+}
+
+const TODO_STATUSES = ["pending", "in_progress", "completed"] as const;
+
+function normalizeToolName(name: string): string {
+  return name
+    .trim()
+    .replace(/[.\s-]+/g, "_")
+    .toLowerCase();
+}
+
+export function isTodoWriteTool(name: string): boolean {
+  const normalized = normalizeToolName(name);
+  return normalized === "todowrite" || normalized === "todo_write";
+}
+
+export function parseTodoWriteEntries(
+  input: unknown,
+): TodoWriteEntry[] | undefined {
+  if (input === null || typeof input !== "object") return undefined;
+  const rec = input as Record<string, unknown>;
+  const todos = rec.todos ?? rec.items;
+  if (!Array.isArray(todos)) return undefined;
+  const entries: TodoWriteEntry[] = [];
+  for (const todo of todos) {
+    if (todo === null || typeof todo !== "object") return undefined;
+    const item = todo as Record<string, unknown>;
+    const content = extractString(item.content);
+    if (
+      content === undefined ||
+      !TODO_STATUSES.includes(item.status as (typeof TODO_STATUSES)[number])
+    ) {
+      return undefined;
+    }
+    const status = item.status as (typeof TODO_STATUSES)[number];
+    const activeForm = extractString(item.activeForm);
+    entries.push({
+      text: content,
+      completed: status === "completed",
+      status,
+      ...(activeForm !== undefined ? { activeForm } : {}),
+    });
+  }
+  return entries;
+}
+
 function extractNumber(value: unknown): number | undefined {
   return typeof value === "number" && !Number.isNaN(value) ? value : undefined;
 }

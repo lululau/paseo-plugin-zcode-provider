@@ -24,7 +24,11 @@ import type {
 import { AdapterError } from "./errors.js";
 import type { HostBridge, HostSubscription } from "./host/bridge.js";
 import type { Logger } from "./logger.js";
-import { mapToolDetail } from "./tool-detail.js";
+import {
+  isTodoWriteTool,
+  mapToolDetail,
+  parseTodoWriteEntries,
+} from "./tool-detail.js";
 import {
   catalogModels,
   decodeModel,
@@ -1313,6 +1317,17 @@ export class ZCodeSession {
       status: "running" | "completed" | "failed";
     },
   ): void {
+    // TodoWrite renders as a native todo list instead of a tool card. Events
+    // that arrive before the native input are skipped so the card never flashes;
+    // failures stay tool cards so the error remains visible.
+    if (tool.status !== "failed" && isTodoWriteTool(tool.name)) {
+      if (tool.input === null || tool.input === undefined) return;
+      const entries = parseTodoWriteEntries(tool.input);
+      if (entries !== undefined) {
+        this.pushTimeline(active, { type: "todo", items: entries });
+        return;
+      }
+    }
     const detail: ProviderToolCallDetail = mapToolDetail(
       tool.name,
       tool.input,

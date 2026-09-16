@@ -13,7 +13,11 @@ import type {
   ProviderToolCallDetail,
 } from "@getpaseo/plugin/server/provider";
 import { AdapterError } from "./errors.js";
-import { mapToolDetail } from "./tool-detail.js";
+import {
+  isTodoWriteTool,
+  mapToolDetail,
+  parseTodoWriteEntries,
+} from "./tool-detail.js";
 import type {
   PermissionRequest,
   SessionSettings,
@@ -379,6 +383,19 @@ export function historyTimeline(
             "NATIVE_PROTOCOL_ERROR",
             "Persisted tool status is unknown",
           );
+        }
+        // Persisted TodoWrite calls replay as a native todo list; failures keep
+        // the tool card so the error stays visible.
+        if (status !== "failed" && isTodoWriteTool(name)) {
+          if (state.input === null || state.input === undefined) {
+            if (status === "running") continue;
+          } else {
+            const entries = parseTodoWriteEntries(state.input);
+            if (entries !== undefined) {
+              append({ type: "todo", items: entries });
+              continue;
+            }
+          }
         }
         const output = jsonValue(state.output ?? state.error ?? null);
         const detail: ProviderToolCallDetail = mapToolDetail(

@@ -781,6 +781,70 @@ it("publishes tool replacements, questions, and context usage without duplicatin
   });
 });
 
+it("renders TodoWrite tool calls as a native todo list instead of a tool card", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  await f.prompt();
+  for (const [index, payload] of [
+    {
+      kind: "started",
+      toolCallId: "todo-1",
+      toolName: "TodoWrite",
+      input: {
+        todos: [
+          { content: "Task 1", status: "completed", priority: "high" },
+          { content: "Task 2", status: "pending", priority: "medium" },
+        ],
+      },
+    },
+    { kind: "result", toolCallId: "todo-1", result: "Updated" },
+  ].entries())
+    await host.emit({
+      type: "session.event",
+      event: {
+        type: "tool.updated",
+        eventId: `todo-${index}`,
+        sessionId: "session-1",
+        seq: index + 1,
+        timestamp: 1,
+        deliveryKind: "desktop-continuous",
+        payload,
+      },
+    });
+  const todoItems = f.events.filter(
+    (e): e is Extract<ProviderEvent, { type: "timeline.item" }> =>
+      e.type === "timeline.item" && e.item.type === "todo",
+  );
+  expect(todoItems.map((e) => e.item)).toEqual([
+    // Replay of the fake snapshot's empty todos at session open.
+    { id: "history:0", type: "todo", items: [] },
+    {
+      id: "todos",
+      type: "todo",
+      items: [
+        { text: "Task 1", completed: true, status: "completed" },
+        { text: "Task 2", completed: false, status: "pending" },
+      ],
+    },
+    {
+      id: "todos",
+      type: "todo",
+      items: [
+        { text: "Task 1", completed: true, status: "completed" },
+        { text: "Task 2", completed: false, status: "pending" },
+      ],
+    },
+  ]);
+  expect(
+    f.events.some(
+      (e) =>
+        e.type === "timeline.item" &&
+        e.item.type === "tool_call" &&
+        e.item.name.toLowerCase() === "todowrite",
+    ),
+  ).toBe(false);
+});
+
 it("treats invalid native events as a terminal failure even outside a turn", async () => {
   const f = await fixture();
   const host = await f.open();

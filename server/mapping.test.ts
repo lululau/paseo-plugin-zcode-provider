@@ -169,6 +169,86 @@ describe("ZCode persisted history", () => {
       /Unsupported persisted message part/u,
     );
   });
+
+  it("replays persisted TodoWrite calls as a todo list and keeps failures as tool cards", () => {
+    const timeline = historyTimeline({
+      session: {
+        sessionId: "session-1",
+        status: "idle",
+        workspace: { workspacePath: "/workspace" },
+      },
+      settings: settings(),
+      messages: [
+        {
+          info: { messageId: "assistant-1", role: "assistant" },
+          parts: [
+            {
+              type: "tool",
+              callId: "todo-1",
+              tool: "TodoWrite",
+              state: {
+                status: "completed",
+                input: {
+                  todos: [
+                    { content: "Task 1", status: "completed" },
+                    {
+                      content: "Task 2",
+                      status: "in_progress",
+                      activeForm: "Doing 2",
+                    },
+                  ],
+                },
+                output: "Updated",
+              },
+            },
+            {
+              type: "tool",
+              callId: "todo-2",
+              tool: "TodoWrite",
+              state: {
+                status: "error",
+                input: { todos: [{ content: "Task 3", status: "pending" }] },
+                error: "rejected",
+              },
+            },
+          ],
+        },
+      ],
+      runtime: {},
+      slashCommands: [],
+    });
+    expect(timeline).toEqual([
+      {
+        type: "todo",
+        items: [
+          { text: "Task 1", completed: true, status: "completed" },
+          {
+            text: "Task 2",
+            completed: false,
+            status: "in_progress",
+            activeForm: "Doing 2",
+          },
+        ],
+      },
+      {
+        type: "tool_call",
+        callId: "todo-2",
+        name: "TodoWrite",
+        status: "failed",
+        error: "rejected",
+        detail: {
+          type: "plain_text",
+          icon: "sparkles",
+          label: "Update Todo List",
+          text: JSON.stringify(
+            [{ content: "Task 3", status: "pending" }],
+            null,
+            2,
+          ),
+        },
+      },
+    ]);
+  });
 });
 
 describe("ZCode prompt and MCP mapping", () => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mapToolDetail } from "./tool-detail.js";
+import {
+  isTodoWriteTool,
+  mapToolDetail,
+  parseTodoWriteEntries,
+} from "./tool-detail.js";
 
 describe("mapToolDetail", () => {
   it("maps bash tool with JSON input and complex output to shell detail", () => {
@@ -280,5 +284,54 @@ describe("mapToolDetail", () => {
       input: { foo: "bar" },
       output: { result: 123 },
     });
+  });
+});
+
+describe("parseTodoWriteEntries", () => {
+  it("maps todos with status and activeForm", () => {
+    expect(
+      parseTodoWriteEntries({
+        todos: [
+          { content: "Task 1", status: "completed", activeForm: "Doing 1" },
+          { content: "Task 2", status: "in_progress" },
+          { content: "Task 3", status: "pending" },
+        ],
+      }),
+    ).toEqual([
+      {
+        text: "Task 1",
+        completed: true,
+        status: "completed",
+        activeForm: "Doing 1",
+      },
+      { text: "Task 2", completed: false, status: "in_progress" },
+      { text: "Task 3", completed: false, status: "pending" },
+    ]);
+  });
+
+  it("accepts an empty list and rejects malformed input", () => {
+    expect(parseTodoWriteEntries({ todos: [] })).toEqual([]);
+    expect(parseTodoWriteEntries({ todos: "not-an-array" })).toBeUndefined();
+    expect(
+      parseTodoWriteEntries({ items: [{ content: "Task" }] }),
+    ).toBeUndefined();
+    expect(
+      parseTodoWriteEntries({ todos: [{ content: "Task", status: "future" }] }),
+    ).toBeUndefined();
+    expect(
+      parseTodoWriteEntries({ todos: [{ status: "pending" }] }),
+    ).toBeUndefined();
+    expect(parseTodoWriteEntries(null)).toBeUndefined();
+    expect(parseTodoWriteEntries("[]")).toBeUndefined();
+  });
+});
+
+describe("isTodoWriteTool", () => {
+  it("matches TodoWrite spellings across separators", () => {
+    expect(isTodoWriteTool("TodoWrite")).toBe(true);
+    expect(isTodoWriteTool("todowrite")).toBe(true);
+    expect(isTodoWriteTool("todo.write")).toBe(true);
+    expect(isTodoWriteTool("todo_write")).toBe(true);
+    expect(isTodoWriteTool("TodoRead")).toBe(false);
   });
 });
