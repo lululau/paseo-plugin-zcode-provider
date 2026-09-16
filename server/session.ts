@@ -21,7 +21,7 @@ import type {
   NativeSessionEvent,
   NativePromptInput,
 } from "./session-types.js";
-import { AdapterError } from "./errors.js";
+import { AdapterError, markDeliveryUncertain } from "./errors.js";
 import type { HostBridge, HostSubscription } from "./host/bridge.js";
 import type { Logger } from "./logger.js";
 import {
@@ -755,18 +755,31 @@ export class ZCodeSession {
           "ZCode input was cancelled before sending",
         );
       sent = true;
-      const ack = await conversationCommand(
-        this.bridge,
-        this.workspace,
-        this.id,
-        "sendText",
-        {
-          text: nativePrompt.content,
-          requestedDelivery: attachments.length ? "queue" : "guide",
-          ...(attachments.length ? { attachments } : {}),
-        },
-        { commandId },
-      );
+      const sendText = (requestedDelivery: "guide" | "queue") =>
+        conversationCommand(
+          this.bridge,
+          this.workspace,
+          this.id,
+          "sendText",
+          {
+            text: nativePrompt.content,
+            requestedDelivery,
+            ...(attachments.length ? { attachments } : {}),
+          },
+          { commandId },
+        );
+      let ack = await sendText(attachments.length ? "queue" : "guide");
+      if (
+        ack.status !== "accepted" &&
+        options?.delivery === "steer" &&
+        attachments.length === 0 &&
+        !this.conversation.idle
+      ) {
+        // A refused mid-run steer would cascade into Paseo's replace fallback,
+        // which cancels the running work. The native queue keeps that work
+        // alive and executes this input once it drains.
+        ack = await sendText("queue");
+      }
       if (ack.status !== "accepted") {
         if (
           ack.status === "failed" ||
@@ -826,6 +839,7 @@ export class ZCodeSession {
         if (!previous && active.inputs.size === 0) this.settle(active);
       } else {
         // The host may already own this command. Never retry uncertain delivery.
+        markDeliveryUncertain(error);
         this.runtimeFailed(error instanceof AdapterError ? error : undefined);
       }
       throw error;

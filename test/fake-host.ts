@@ -53,6 +53,8 @@ export class FakeBridge implements HostBridge {
     | "error" = "draft";
   autoDrain = true;
   confirmCancellation = true;
+  /** Refuse guide deliveries while running, emulating a held native queue. */
+  rejectGuideWhileRunning = false;
   queueItems: Array<{
     sourceCommandId: string;
     queueItemId: string;
@@ -148,6 +150,18 @@ export class FakeBridge implements HostBridge {
       };
       if (e.type === "sendText") {
         const running = this.conversationPhase === "running";
+        if (
+          running &&
+          this.rejectGuideWhileRunning &&
+          e.payload.requestedDelivery === "guide"
+        ) {
+          result = {
+            commandId: e.commandId,
+            status: "rejected",
+            revisionAtDecision: this.conversationRevision,
+          };
+          return resultSchema.parse(structuredClone(result));
+        }
         if (running)
           this.queueItems.push({
             sourceCommandId: e.commandId,

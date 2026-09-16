@@ -31,4 +31,19 @@ export class AdapterError extends Error {
     super(message, options);
   }
 }
+
+// Prompt failures where the native host may already own the input. The failed
+// send's clientMessageId must stay reserved so the caller cannot re-execute it;
+// every other failure never reached the host and may be retried under the same
+// ID (Paseo's steer-unavailable replace fallback resends exactly that way).
+const uncertainDeliveries = new WeakSet<object>();
+
+export function markDeliveryUncertain(error: unknown): void {
+  if (error instanceof Error) uncertainDeliveries.add(error);
+}
+
+export function isDeliveryUncertain(error: unknown): boolean {
+  return error instanceof Error && uncertainDeliveries.has(error);
+}
+
 import type { RuntimeDiagnostic } from "./diagnostics.js";

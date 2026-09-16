@@ -207,6 +207,93 @@ it("negotiates only implemented capabilities and rejects unsupported inputs", as
   });
 });
 
+it("frees the clientMessageId of a steer that never reached the host so the replace fallback can resend it", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  // No active turn: the steer is rejected before any native send.
+  await f.connection.send({
+    type: "session.prompt",
+    sessionId: "public-1",
+    prompt: {
+      clientMessageId: "stale-steer",
+      delivery: "steer",
+      input: { type: "message", content: [{ type: "text", text: "steer" }] },
+    },
+  });
+  expect(await f.wait("session.prompt_result")).toMatchObject({
+    clientMessageId: "stale-steer",
+    result: { type: "failed", error: { code: "SESSION_BUSY" } },
+  });
+  // Paseo's replace fallback resends the same message under the same ID.
+  await f.connection.send({
+    type: "session.prompt",
+    sessionId: "public-1",
+    prompt: {
+      clientMessageId: "stale-steer",
+      delivery: "auto",
+      input: {
+        type: "message",
+        content: [{ type: "text", text: "fresh turn" }],
+      },
+    },
+  });
+  await vi.waitFor(() =>
+    expect(
+      f.events.filter((e) => e.type === "session.prompt_result").length,
+    ).toBe(2),
+  );
+  expect(
+    f.events.findLast((e) => e.type === "session.prompt_result"),
+  ).toMatchObject({
+    clientMessageId: "stale-steer",
+    result: { type: "turn" },
+  });
+  expect(
+    f.events.filter((e) => e.type === "session.turn").map((e) => e.state),
+  ).toEqual(["started"]);
+});
+
+it("queues a refused mid-run steer so the running work is not interrupted", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  const event = nativeEvents(host);
+  host.rejectGuideWhileRunning = true;
+  await f.prompt();
+  await event("turn.started", { inputId: commandCalls(host)[0]!.commandId });
+  await f.connection.send({
+    type: "session.prompt",
+    sessionId: "public-1",
+    prompt: {
+      clientMessageId: "steer-1",
+      delivery: "steer",
+      input: { type: "message", content: [{ type: "text", text: "steer" }] },
+    },
+  });
+  await vi.waitFor(() =>
+    expect(
+      f.events.some(
+        (e) =>
+          e.type === "session.prompt_result" && e.clientMessageId === "steer-1",
+      ),
+    ).toBe(true),
+  );
+  expect(
+    f.events.findLast((e) => e.type === "session.prompt_result"),
+  ).toMatchObject({
+    clientMessageId: "steer-1",
+    result: { type: "steer" },
+  });
+  expect(
+    commandCalls(host)
+      .filter((e) => e.type === "sendText")
+      .map((e) => e.payload.requestedDelivery),
+  ).toEqual(["guide", "guide", "queue"]);
+  // The running turn was neither cancelled nor replaced.
+  expect(
+    f.events.filter((e) => e.type === "session.turn").map((e) => e.state),
+  ).toEqual(["started"]);
+});
+
 it("discovers workspace models and native sessions and closes discovery hosts", async () => {
   const f = await fixture();
   await f.connection.send({

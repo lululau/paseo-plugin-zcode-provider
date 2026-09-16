@@ -33,7 +33,7 @@ import {
   formatDiagnostic,
   runtimeDiagnostic,
 } from "./diagnostics.js";
-import { AdapterError } from "./errors.js";
+import { AdapterError, isDeliveryUncertain } from "./errors.js";
 import { catalogModels, mapMcpServers, ZCODE_MODES } from "./mapping.js";
 import {
   ZCodeSession,
@@ -208,7 +208,12 @@ export class ZCodeConnection implements ProviderConnection {
         if (input.type === "session.prompt") {
           const promptEntry = entry ?? this.sessions.get(input.sessionId);
           if (promptEntry?.messages.get(input.prompt.clientMessageId)) return;
-          promptEntry?.messages.set(input.prompt.clientMessageId, true);
+          // Deliveries the host may already own keep the ID reserved; failed
+          // sends that never reached the host free it so Paseo's replace
+          // fallback can retry the same message under the same ID.
+          if (isDeliveryUncertain(error))
+            promptEntry?.messages.set(input.prompt.clientMessageId, true);
+          else promptEntry?.messages.delete(input.prompt.clientMessageId);
           this.emit({
             type: "session.prompt_result",
             sessionId: input.sessionId,
