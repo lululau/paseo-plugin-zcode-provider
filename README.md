@@ -107,7 +107,7 @@ The installation command above tracks this repository's default branch. Check th
 - Integration with the standard account quota, reset time, and provider diagnostics panels is not implemented. The plugin's own Diagnostics screen is read-only and is not a replacement for the standard provider diagnostics panel.
 - The Diagnostics screen cannot change settings. The install path and other daemon environment settings are still configured on the daemon host.
 - In Paseo 0.8.0, initial context usage is not replayed to subscribers immediately after creating or resuming a session, so the standard UI cannot display that initial value. Subsequent usage updates are delivered.
-- Conversation rewind, structured output, independent child session management, and automatic conversion of persistence handles from the old patcher are unsupported.
+- File rewind, combined conversation-and-file rewind, structured output, independent child session management, and automatic conversion of persistence handles from the old patcher are unsupported. Conversation rewind uses ZCode's native `/rewind conversation` path.
 
 See [remaining work](docs/todo.md) for the evidence and conditions for resolving each limitation.
 

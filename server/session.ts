@@ -16,6 +16,7 @@ import type {
   ProviderToolCallDetail,
   ProviderConfigState,
 } from "@getpaseo/plugin/server/provider";
+import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type {
   NativeTimelineItem,
   NativeSessionEvent,
@@ -68,6 +69,7 @@ const KNOWN_NOOP_EVENTS = new Set([
   "permission.requested",
   "permission.resolved",
   "checkpoint.created",
+  "rewind.triggered",
 ]);
 
 interface ActiveTurn {
@@ -104,6 +106,7 @@ interface ActiveTurn {
   cancelled: boolean;
   cancelSent: boolean;
   settled: boolean;
+  silent: boolean;
   usage?: ProviderUsage;
   completion: Promise<void>;
   resolve: (result: void) => void;
@@ -157,6 +160,7 @@ export class ZCodeSession {
   private editingMode: string;
   private configuringMode = false;
   private readonly conversation: Conversation;
+  private readonly nativeMessageIds = new Map<string, string>();
 
   private constructor(
     private readonly bridge: HostBridge,
@@ -224,6 +228,56 @@ export class ZCodeSession {
       config.mode,
       config.settings?.plan_mode as boolean | undefined,
     );
+  }
+
+  async rewindConversation(token: JsonValue): Promise<void> {
+    this.assertIdle();
+    const nativeId = this.resolveRewindMessageId(token);
+    const active = this.createActive();
+    active.silent = true;
+    this.active = active;
+    const commandId = randomUUID();
+    const input = { accepted: false, consumed: false };
+    active.inputs.set(commandId, input);
+    active.inFlight++;
+    try {
+      const ack = await conversationCommand(
+        this.bridge,
+        this.workspace,
+        this.id,
+        "sendText",
+        {
+          text: `/rewind conversation ${nativeId}`,
+          requestedDelivery: "guide",
+        },
+        { commandId },
+      );
+      if (ack.status !== "accepted") {
+        throw new AdapterError(
+          "NATIVE_INPUT_REJECTED",
+          "ZCode did not accept conversation rewind",
+        );
+      }
+      if (
+        ack.result?.type !== "inputAccepted" ||
+        ack.result.inputId !== commandId ||
+        !ack.result.delivery
+      ) {
+        throw new AdapterError(
+          "NATIVE_PROTOCOL_ERROR",
+          "ZCode rewind acknowledgement is inconsistent",
+        );
+      }
+      input.accepted = true;
+      if (ack.result.delivery === "startNow") input.consumed = true;
+    } catch (error) {
+      if (!active.settled) this.failActive(error, false);
+      throw error;
+    } finally {
+      active.inFlight--;
+      if (this.active === active) void this.maybeComplete(active);
+    }
+    await active.completion;
   }
 
   async startTurn(
@@ -679,6 +733,7 @@ export class ZCodeSession {
       cancelled: false,
       cancelSent: false,
       settled: false,
+      silent: false,
       completion,
       resolve,
       reject,
@@ -824,6 +879,7 @@ export class ZCodeSession {
         type: "user_message",
         text: nativePrompt.content,
         messageId: commandId,
+        revertToken: commandId,
         ...(options?.clientMessageId
           ? { clientMessageId: options.clientMessageId }
           : {}),
@@ -1078,9 +1134,16 @@ export class ZCodeSession {
       );
     }
     if (event.type === "turn.started") {
-      const inputId = z
-        .object({ inputId: z.string().optional() })
-        .parse(event.payload).inputId;
+      const started = z
+        .object({
+          inputId: z.string().optional(),
+          messageId: z.string().optional(),
+        })
+        .passthrough()
+        .parse(event.payload);
+      const inputId = started.inputId;
+      if (inputId && started.messageId)
+        this.nativeMessageIds.set(inputId, started.messageId);
       const input = inputId ? active.inputs.get(inputId) : undefined;
       if (
         !input ||
@@ -1427,6 +1490,11 @@ export class ZCodeSession {
       this.finishCancelled(active);
       return;
     }
+    if (active.silent) {
+      await this.refreshSnapshotHistory();
+      this.settle(active);
+      return;
+    }
     this.emit({
       type: "usage_updated",
       usage: active.usage,
@@ -1445,11 +1513,13 @@ export class ZCodeSession {
     if (active.nativeTurnId) this.cancelledNativeTurns.add(active.nativeTurnId);
     for (const id of active.completedNativeTurns)
       this.cancelledNativeTurns.add(id);
-    this.emit({
-      type: "turn_canceled",
-      reason: "cancelled",
-      turnId: active.id,
-    });
+    if (!active.silent) {
+      this.emit({
+        type: "turn_canceled",
+        reason: "cancelled",
+        turnId: active.id,
+      });
+    }
     this.settle(active);
   }
 
@@ -1462,14 +1532,16 @@ export class ZCodeSession {
     });
     if (report) this.logger.error("zcode.turn.failed", error);
     const message = safeError(error);
-    this.emit({
-      type: "turn_failed",
-      error: message,
-      diagnostic: formatDiagnostic(error),
-      code:
-        error instanceof AdapterError ? error.code : "NATIVE_PROTOCOL_ERROR",
-      turnId: active.id,
-    });
+    if (!active.silent) {
+      this.emit({
+        type: "turn_failed",
+        error: message,
+        diagnostic: formatDiagnostic(error),
+        code:
+          error instanceof AdapterError ? error.code : "NATIVE_PROTOCOL_ERROR",
+        turnId: active.id,
+      });
+    }
     active.settled = true;
     this.active = undefined;
     active.reject(error);
@@ -1478,8 +1550,29 @@ export class ZCodeSession {
   private settle(active: ActiveTurn): void {
     if (active.settled) return;
     active.settled = true;
+    active.buffered.length = 0;
     if (this.active === active) this.active = undefined;
     active.resolve();
+  }
+
+  private resolveRewindMessageId(token: JsonValue): string {
+    if (typeof token !== "string" || token.length === 0) {
+      throw new AdapterError(
+        "INVALID_CONFIGURATION",
+        "ZCode rewind token is invalid",
+      );
+    }
+    return this.nativeMessageIds.get(token) ?? token;
+  }
+
+  private async refreshSnapshotHistory(): Promise<void> {
+    const snapshot = await this.bridge.request(
+      "readSession",
+      { workspacePath: this.workspace, sessionId: this.id },
+      SessionSnapshotSchema,
+    );
+    this.updateSnapshot(snapshot);
+    this.history.splice(0, this.history.length, ...historyTimeline(snapshot));
   }
 
   private async handlePermission(request: PermissionRequest): Promise<void> {

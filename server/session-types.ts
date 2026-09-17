@@ -8,7 +8,7 @@ import type {
 
 export type NativePromptInput = string | ProviderContent[];
 type WithoutIdentity<T> = T extends ProviderTimelineItem
-  ? Omit<T, "id" | "revertToken">
+  ? Omit<T, "id">
   : never;
 export type NativeTimelineItem = WithoutIdentity<ProviderTimelineItem>;
 

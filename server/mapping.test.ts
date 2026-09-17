@@ -196,7 +196,12 @@ describe("ZCode persisted history", () => {
       slashCommands: [],
     });
     expect(timeline).toEqual([
-      { type: "user_message", text: "question", messageId: "user-1" },
+      {
+        type: "user_message",
+        text: "question",
+        messageId: "user-1",
+        revertToken: "user-1",
+      },
       { type: "reasoning", text: "thinking" },
       { type: "assistant_message", text: "answer", messageId: "assistant-1" },
       { type: "todo", items: [] },
@@ -501,6 +506,7 @@ it("restores text and attachments as one native user message", () => {
     {
       type: "user_message",
       messageId: "queued-input",
+      revertToken: "queued-input",
       text: "Read attachment\n\n[input.txt](artifact://attachment)",
     },
   ]);

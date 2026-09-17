@@ -55,6 +55,7 @@ export const CAPABILITIES = [
   "session.configure",
   "session.list",
   "session.persistence",
+  "session.revert.conversation",
   "permission",
 ] as const satisfies readonly ProviderCapability[];
 
@@ -171,7 +172,9 @@ export class ZCodeConnection implements ProviderConnection {
     if (input.type === "session.interrupt")
       this.requireSession(input.sessionId).inputGeneration++;
     const entry =
-      input.type === "session.prompt" || input.type === "session.configure"
+      input.type === "session.prompt" ||
+      input.type === "session.configure" ||
+      input.type === "session.revert"
         ? this.requireSession(input.sessionId)
         : undefined;
     const releaseInput =
@@ -353,11 +356,7 @@ export class ZCodeConnection implements ProviderConnection {
       return;
     }
     if (input.type === "session.open") return this.openSession(input);
-    if (
-      input.type === "session.archive" ||
-      input.type === "session.unarchive" ||
-      input.type === "session.revert"
-    )
+    if (input.type === "session.archive" || input.type === "session.unarchive")
       throw new Error("Unsupported ZCode operation");
     const entry = this.requireSession(input.sessionId);
     switch (input.type) {
@@ -468,6 +467,15 @@ export class ZCodeConnection implements ProviderConnection {
       }
       case "session.interrupt":
         await entry.native.interrupt();
+        break;
+      case "session.revert":
+        if (input.scope !== "conversation") {
+          throw new AdapterError(
+            "INVALID_CONFIGURATION",
+            "ZCode only supports conversation rewind",
+          );
+        }
+        await entry.native.rewindConversation(input.token);
         break;
       case "session.permission":
         await entry.native.respondToPermission(

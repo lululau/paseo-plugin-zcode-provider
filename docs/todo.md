@@ -53,4 +53,4 @@
 
 ## 自動対応しない事項
 
-旧 patcher の保存ハンドルの変換、未検証の ZCode バージョンや OS、ZCode host 自身の仕様を超える steering / rewind / 構造化出力 / 子セッションの独立管理は対象外です。必要になった場合に別途仕様を調査します。既存の ZCode 保存会話のインポートは実装済みです。
+旧 patcher の保存ハンドルの変換、未検証の ZCode バージョンや OS、ZCode host 自身の仕様を超えるファイル rewind / 構造化出力 / 子セッションの独立管理は対象外です。会話 rewind は native `/rewind conversation` に接続済みです。必要になった場合に別途仕様を調査します。既存の ZCode 保存会話のインポートは実装済みです。

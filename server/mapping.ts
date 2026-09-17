@@ -386,6 +386,7 @@ export function historyTimeline(
                   type: "user_message",
                   text: part.text,
                   messageId: message.info.messageId,
+                  revertToken: message.info.messageId,
                 }
               : {
                   type: "assistant_message",
@@ -407,7 +408,12 @@ export function historyTimeline(
         const text = `[${label}](${part.url})`;
         append(
           message.info.role === "user"
-            ? { type: "user_message", text, messageId: message.info.messageId }
+            ? {
+                type: "user_message",
+                text,
+                messageId: message.info.messageId,
+                revertToken: message.info.messageId,
+              }
             : {
                 type: "assistant_message",
                 text,

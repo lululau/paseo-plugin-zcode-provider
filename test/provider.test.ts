@@ -178,6 +178,127 @@ async function fixture(
   };
 }
 
+it("advertises conversation rewind and keeps file rewind unsupported", async () => {
+  const f = await fixture();
+  expect(f.connection.capabilities).toContain("session.revert.conversation");
+  expect(f.connection.capabilities).not.toContain("session.revert.files");
+  expect(f.connection.capabilities).not.toContain("session.revert.both");
+  const host = await f.open();
+  expect(
+    f.events.find((event) => event.type === "session.opened")?.capabilities,
+  ).toContain("session.revert.conversation");
+  await f.prompt();
+  const user = f.events.find(
+    (event): event is Extract<ProviderEvent, { type: "timeline.item" }> =>
+      event.type === "timeline.item" && event.item.type === "user_message",
+  );
+  expect(user?.item).toMatchObject({
+    type: "user_message",
+    revertToken: commandCalls(host)[0]!.commandId,
+  });
+});
+
+it("rewinds the native conversation to before the selected user message", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  const event = nativeEvents(host);
+  await f.prompt();
+  const promptId = commandCalls(host).find(
+    (command) => command.type === "sendText",
+  )!.commandId;
+  await event("turn.started", { inputId: promptId, messageId: "msg_native" });
+  await completeTurn(host, 2);
+  await vi.waitFor(() =>
+    expect(
+      f.events.some(
+        (entry) => entry.type === "session.turn" && entry.state === "completed",
+      ),
+    ).toBe(true),
+  );
+  const user = f.events.find(
+    (entry): entry is Extract<ProviderEvent, { type: "timeline.item" }> =>
+      entry.type === "timeline.item" && entry.item.type === "user_message",
+  );
+  expect(user?.item.revertToken).toBeDefined();
+  const revert = f.connection.send({
+    type: "session.revert",
+    requestId: "rewind-1",
+    sessionId: "public-1",
+    token: user!.item.revertToken!,
+    scope: "conversation",
+  });
+  await vi.waitFor(() => {
+    expect(
+      commandCalls(host).some(
+        (command) =>
+          command.type === "sendText" &&
+          command.payload.text === "/rewind conversation msg_native",
+      ),
+    ).toBe(true);
+  });
+  const rewind = commandCalls(host).find(
+    (command) =>
+      command.type === "sendText" &&
+      command.payload.text === "/rewind conversation msg_native",
+  )!;
+  host.current.messages = [];
+  await host.emit({
+    type: "session.event",
+    event: {
+      type: "turn.started",
+      payload: { inputId: rewind.commandId },
+      turnId: "native-rewind",
+      eventId: "rewind-started",
+      seq: 3,
+      timestamp: 3,
+      sessionId: "session-1",
+      deliveryKind: "desktop-continuous",
+    },
+  });
+  await host.emit({
+    type: "session.event",
+    event: {
+      type: "rewind.triggered",
+      payload: {
+        rewindId: "rewind_1",
+        scope: "conversation",
+        targetMessageId: "msg_native",
+      },
+      turnId: "native-rewind",
+      eventId: "rewind-triggered",
+      seq: 4,
+      timestamp: 4,
+      sessionId: "session-1",
+      deliveryKind: "desktop-continuous",
+    },
+  });
+  await completeTurn(host, 5);
+  await revert;
+  expect(
+    f.events.filter((entry) => entry.type === "request.completed").at(-1),
+  ).toMatchObject({ requestId: "rewind-1" });
+  expect(
+    f.events.filter(
+      (entry) =>
+        entry.type === "timeline.item" && entry.item.type === "user_message",
+    ),
+  ).toHaveLength(1);
+});
+
+it("rejects file and combined rewind scopes", async () => {
+  const f = await fixture();
+  await f.open();
+  await expect(
+    f.connection.send({
+      type: "session.revert",
+      requestId: "rewind-files",
+      sessionId: "public-1",
+      token: "msg_native",
+      scope: "files",
+    }),
+  ).rejects.toThrow(/session.revert.files/);
+});
+
 it("negotiates only implemented capabilities and rejects unsupported inputs", async () => {
   const f = await fixture();
   expect(f.connection.capabilities).toContain("prompt.steer");
