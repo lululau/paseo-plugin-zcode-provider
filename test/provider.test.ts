@@ -69,6 +69,135 @@ it("closes native generation when the stop RPC fails", async () => {
   expect(host.closed).toBe(true);
 });
 
+it("rewinds to a message by delegating to the native /rewind command", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  const callsBefore = host.calls.length;
+  await f.connection.send({
+    type: "session.revert",
+    requestId: "rewind-1",
+    sessionId: "public-1",
+    token: "native-message-7",
+    scope: "both",
+  });
+  await f.wait("request.completed");
+  const rewind = host.calls.filter(
+    (c) =>
+      c.method === "sendConversationCommandV4" &&
+      (c.params as { envelope?: { type?: string } }).envelope?.type ===
+        "sendText",
+  );
+  expect(rewind).toHaveLength(1);
+  const envelope = (
+    rewind[0]!.params as {
+      envelope: { payload: { text: string; requestedDelivery: string } };
+    }
+  ).envelope;
+  expect(envelope.payload.text).toBe("/rewind both native-message-7");
+  expect(envelope.payload.requestedDelivery).toBe("startNow");
+  // Rewind resyncs the timeline mirror against the native transcript.
+  expect(host.calls.slice(callsBefore).map((c) => c.method)).toContain(
+    "readSession",
+  );
+});
+
+it("upgrades user message revert tokens to native transcript ids after a turn", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  await f.prompt();
+  const emitted = () =>
+    f.events.flatMap((event) =>
+      event.type === "timeline.item" &&
+      event.item.type === "user_message" &&
+      event.item.text === "Plan and implement"
+        ? [event.item]
+        : [],
+    );
+  expect(emitted().length).toBeGreaterThan(0);
+  expect((emitted().at(-1)! as { revertToken?: string }).revertToken).not.toBe(
+    "native-1",
+  );
+  // The turn settles; the host snapshot now exposes the persisted user
+  // message under its native transcript id.
+  host.current.messages = [
+    {
+      info: { messageId: "native-1", role: "user" },
+      parts: [{ type: "text", text: "Plan and implement" }],
+    },
+    {
+      info: { messageId: "native-2", role: "assistant" },
+      parts: [{ type: "text", text: "Working on it." }],
+    },
+  ];
+  await host.emit({
+    type: "session.event",
+    event: {
+      eventId: "completed-1",
+      sessionId: "session-1",
+      seq: 1,
+      timestamp: 2,
+      deliveryKind: "desktop-continuous",
+      type: "turn.completed",
+      payload: { resultType: "success" },
+    },
+  });
+  await vi.waitFor(() =>
+    expect(
+      emitted().some(
+        (item) => (item as { revertToken?: string }).revertToken === "native-1",
+      ),
+    ).toBe(true),
+  );
+});
+
+it("rejects revert with a malformed token and while a turn is active", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  await f.connection.send({
+    type: "session.revert",
+    requestId: "rewind-bad",
+    sessionId: "public-1",
+    token: 42,
+    scope: "conversation",
+  });
+  expect(await f.wait("request.failed")).toMatchObject({
+    requestId: "rewind-bad",
+    error: { code: "NATIVE_PROTOCOL_ERROR" },
+  });
+  expect(
+    host.calls.filter((c) => c.method === "sendConversationCommandV4"),
+  ).toHaveLength(0);
+  // An active turn blocks the rewind before any native send.
+  await f.prompt("turn-active");
+  await f.connection.send({
+    type: "session.revert",
+    requestId: "rewind-busy",
+    sessionId: "public-1",
+    token: "native-message-7",
+    scope: "files",
+  });
+  expect(await f.wait("request.failed")).toMatchObject({
+    requestId: "rewind-busy",
+    error: { code: "SESSION_BUSY" },
+  });
+  expect(
+    host.calls.filter((c) => c.method === "sendConversationCommandV4"),
+  ).toHaveLength(1);
+});
+
+it("attaches the native messageId as the revert token on text items", async () => {
+  const f = await fixture();
+  await f.open();
+  await f.prompt("msg-with-id");
+  const user = f.events.findLast(
+    (event) =>
+      event.type === "timeline.item" && event.item.type === "user_message",
+  );
+  expect(user).toMatchObject({
+    item: { type: "user_message", revertToken: expect.any(String) },
+  });
+});
+
 async function fixture(
   options: {
     prepareHost?: (host: FakeBridge) => void;
@@ -181,6 +310,9 @@ async function fixture(
 it("negotiates only implemented capabilities and rejects unsupported inputs", async () => {
   const f = await fixture();
   expect(f.connection.capabilities).toContain("prompt.steer");
+  expect(f.connection.capabilities).toContain("session.revert.conversation");
+  expect(f.connection.capabilities).toContain("session.revert.files");
+  expect(f.connection.capabilities).toContain("session.revert.both");
   await expect(
     f.registration.connect({ versions: [2], capabilities: [] }),
   ).rejects.toThrow(/version 1/);
@@ -480,12 +612,14 @@ it("streams replacement snapshots and reports token usage at turn completion", a
       id: expect.any(String),
       text: "hel",
       messageId: "assistant-1",
+      revertToken: "assistant-1",
     },
     {
       type: "assistant_message",
       id: expect.any(String),
       text: "hello",
       messageId: "assistant-1",
+      revertToken: "assistant-1",
     },
   ]);
   expect(messages[0]!.item.id).toBe(messages[1]!.item.id);

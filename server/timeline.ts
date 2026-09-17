@@ -11,7 +11,11 @@ export class TimelineSnapshots {
   private lastTextId?: string;
 
   replay(item: NativeTimelineItem): ProviderTimelineItem {
-    return { ...item, id: `history:${this.sequence++}` };
+    return {
+      ...item,
+      ...revertTokenOf(item),
+      id: `history:${this.sequence++}`,
+    } as ProviderTimelineItem;
   }
 
   live(item: NativeTimelineItem, turnId?: string): ProviderTimelineItem {
@@ -28,18 +32,38 @@ export class TimelineSnapshots {
       const id = this.lastTextId!;
       const text = (this.text.get(id) ?? "") + item.text;
       this.text.set(id, text);
-      return { ...item, id, text };
+      return {
+        ...item,
+        ...revertTokenOf(item),
+        id,
+        text,
+      } as ProviderTimelineItem;
     }
     // Tool boundaries delimit text without native message IDs; todo updates do not.
     if (item.type !== "todo") this.lastTextKey = undefined;
     return {
       ...item,
+      ...revertTokenOf(item),
       id:
         item.type === "tool_call"
           ? `tool:${item.callId}`
           : item.type === "todo"
             ? "todos"
             : `live:${this.sequence++}`,
-    };
+    } as ProviderTimelineItem;
   }
+}
+
+/**
+ * ZCode can rewind to any native message; expose its messageId as the
+ * Paseo revert token so the app renders "rewind to this message".
+ */
+function revertTokenOf(item: NativeTimelineItem): { revertToken: string } | {} {
+  if (
+    (item.type === "user_message" || item.type === "assistant_message") &&
+    typeof item.messageId === "string"
+  ) {
+    return { revertToken: item.messageId };
+  }
+  return {};
 }

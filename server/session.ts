@@ -67,6 +67,9 @@ const KNOWN_NOOP_EVENTS = new Set([
   "permission.requested",
   "permission.resolved",
   "checkpoint.created",
+  // ZCode emits rewind_triggered (with a turnId) while the plugin sees no
+  // public turn; its effects arrive through the next snapshot/state update.
+  "rewind_triggered",
 ]);
 
 interface ActiveTurn {
@@ -141,13 +144,20 @@ export class ZCodeSession {
   readonly id: string;
   private readonly listeners = new Set<(event: NativeSessionEvent) => void>();
   private readonly pending = new Map<string, PendingInteraction>();
-  private readonly history: NativeTimelineItem[];
+  private history: NativeTimelineItem[];
   private subscription!: HostSubscription;
   private snapshot: SessionSnapshot;
   private active: ActiveTurn | undefined;
   private pendingAdmissions = 0;
   private readonly cancelledNativeTurns = new Set<string>();
   private lastSequence: number | undefined;
+  /**
+   * Conversation command IDs issued by provider-initiated operations (rewind).
+   * ZCode runs these inside their own native turns whose events arrive while
+   * the plugin sees no public turn; they must not fail the session.
+   */
+  private readonly pendingNativeCommandTurns = new Set<string>();
+  private pendingNativeCommandDeadline: number | undefined;
   private closed = false;
   private failed = false;
   private contextUsage: ProviderUsage | undefined;
@@ -488,6 +498,96 @@ export class ZCodeSession {
     } catch (error) {
       this.runtimeFailed(error instanceof AdapterError ? error : undefined);
       throw error;
+    }
+  }
+
+  /**
+   * Rewind the conversation to a native message. The token is the ZCode
+   * messageId captured on the timeline item when it was emitted; scope maps
+   * directly onto ZCode's own rewind scopes.
+   */
+  async revert(
+    token: unknown,
+    scope: "conversation" | "files" | "both",
+  ): Promise<void> {
+    this.assertIdle();
+    if (typeof token !== "string" || token.length === 0) {
+      throw new AdapterError(
+        "NATIVE_PROTOCOL_ERROR",
+        "ZCode revert token is missing or malformed",
+      );
+    }
+    const arg =
+      scope === "conversation"
+        ? "conversation"
+        : scope === "files"
+          ? "code"
+          : "both";
+    // ZCode implements rewind as a slash command on the V4 conversation
+    // channel; /rewind parses "<scope> <messageId>" natively.
+    const commandId = randomUUID();
+    // Register BEFORE sending: ZCode starts its native turn as soon as the
+    // command lands, so turn events can race ahead of the command ack.
+    // The window self-expires so a stale flag can never mask real errors.
+    this.pendingNativeCommandTurns.add(commandId);
+    this.pendingNativeCommandDeadline = Date.now() + 30_000;
+    const ack = await conversationCommand(
+      this.bridge,
+      this.workspace,
+      this.id,
+      "sendText",
+      { text: `/rewind ${arg} ${token}`, requestedDelivery: "startNow" },
+      { commandId },
+    );
+    if (ack.status !== "accepted" && ack.status !== "noop") {
+      throw new AdapterError(
+        "NATIVE_PROTOCOL_ERROR",
+        `ZCode rewind was rejected (${ack.status})`,
+      );
+    }
+    // Rewinding truncates the native transcript; drop our mirror and the
+    // derived timeline so future history replays match the host.
+    await this.refreshContextSnapshot();
+    this.history = historyTimeline(this.snapshot);
+    this.reconcileNativeMessageIds();
+  }
+
+  /**
+   * ZCode's `/rewind` needs the native transcript messageId, but timeline
+   * items carry our V4 commandId (the host never forwards turn_input_received
+   * to the session event stream, so the native id only shows up in session
+   * snapshots). After each snapshot refresh, match user messages by text and
+   * upgrade their revertToken to the native id. Re-emitting keeps Paseo's
+   * revertToken table current even when the item itself is deduped.
+   */
+  private async reconcileNativeMessageIds(): Promise<void> {
+    if (this.snapshotRead) await this.snapshotRead;
+    await this.refreshContextSnapshot();
+    const native = this.snapshot.messages.filter((m) => m.info.role === "user");
+    const textOf = (m: SessionSnapshot["messages"][number]): string =>
+      m.parts
+        .filter(
+          (p): p is { type: "text"; text: string } =>
+            p.type === "text" && typeof p.text === "string",
+        )
+        .map((p) => p.text)
+        .join("\n\n");
+    let upgraded = false;
+    for (const item of this.history) {
+      if (item.type !== "user_message") continue;
+      const match = native.find(
+        (m) => textOf(m) === item.text && m.info.messageId !== item.messageId,
+      );
+
+      if (!match) continue;
+      item.messageId = match.info.messageId;
+      upgraded = true;
+    }
+    if (upgraded) {
+      for (const item of this.history) {
+        if (item.type !== "user_message") continue;
+        this.emit({ type: "timeline", item });
+      }
     }
   }
 
@@ -1023,6 +1123,13 @@ export class ZCodeSession {
             );
           });
       }
+      this.logger.error(
+        "zcode.session.event_failed",
+        error,
+        dynamic.type === "session.event"
+          ? { eventType: dynamic.event.type }
+          : { eventType: dynamic.type },
+      );
       this.runtimeFailed(
         diagnosticError(error, {
           ...this.bridge.diagnostic,
@@ -1071,6 +1178,26 @@ export class ZCodeSession {
     if (KNOWN_NOOP_EVENTS.has(event.type)) return;
     if (event.turnId && this.cancelledNativeTurns.has(event.turnId)) return;
     if (active === undefined) {
+      // Provider-initiated native commands (rewind) run in their own turns;
+      // their events arrive while no public turn is active.
+      if (
+        this.pendingNativeCommandTurns.size > 0 &&
+        (event.type.startsWith("turn.") || event.type === "rewind_triggered")
+      ) {
+        if (
+          this.pendingNativeCommandDeadline !== undefined &&
+          Date.now() > this.pendingNativeCommandDeadline
+        ) {
+          this.pendingNativeCommandTurns.clear();
+          this.pendingNativeCommandDeadline = undefined;
+        } else {
+          this.logger.log(
+            "info",
+            `zcode.session.command_event_ignored (eventType=${event.type})`,
+          );
+          return;
+        }
+      }
       throw new AdapterError(
         "NATIVE_PROTOCOL_ERROR",
         "ZCode emitted a turn event while idle",
@@ -1176,6 +1303,9 @@ export class ZCodeSession {
         active.completedNativeTurns.add(active.nativeTurnId);
       active.lastTerminal = event.payload;
       await this.maybeComplete(active);
+      // Once the turn settles, the native transcript contains this turn's
+      // user message with its real messageId; upgrade revert tokens.
+      this.reconcileNativeMessageIds().catch(() => {});
       return;
     }
     if (event.type === "turn.failed") {

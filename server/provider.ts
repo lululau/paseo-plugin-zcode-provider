@@ -56,6 +56,9 @@ export const CAPABILITIES = [
   "session.list",
   "session.persistence",
   "permission",
+  "session.revert.conversation",
+  "session.revert.files",
+  "session.revert.both",
 ] as const satisfies readonly ProviderCapability[];
 
 export type BridgeFactory = (
@@ -353,14 +356,14 @@ export class ZCodeConnection implements ProviderConnection {
       return;
     }
     if (input.type === "session.open") return this.openSession(input);
-    if (
-      input.type === "session.archive" ||
-      input.type === "session.unarchive" ||
-      input.type === "session.revert"
-    )
+    if (input.type === "session.archive" || input.type === "session.unarchive")
       throw new Error("Unsupported ZCode operation");
     const entry = this.requireSession(input.sessionId);
     switch (input.type) {
+      case "session.revert": {
+        await entry.native.revert(input.token, input.scope);
+        break;
+      }
       case "session.prompt": {
         const prompt = input.prompt.input;
         if (input.prompt.clearPendingPermissions)
