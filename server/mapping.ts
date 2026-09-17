@@ -109,6 +109,7 @@ export function catalogModels(settings: SessionSettings): ProviderModel[] {
       );
     }
     ids.add(id);
+    const contextWindow = modelContextWindowTokens(model);
     return {
       id,
       label: model.ref.modelId,
@@ -116,6 +117,9 @@ export function catalogModels(settings: SessionSettings): ProviderModel[] {
         ? {}
         : { description: model.providerLabel }),
       isDefault: id === current,
+      ...(contextWindow === undefined
+        ? {}
+        : { contextWindowMaxTokens: contextWindow }),
       ...(thinking === undefined
         ? {}
         : {
@@ -132,6 +136,59 @@ export function catalogModels(settings: SessionSettings): ProviderModel[] {
   }
   requireMode(settings.mode.current);
   return models;
+}
+
+const GLM_53_CONTEXT_WINDOW = 1_000_000;
+
+export function currentCatalogContextWindow(
+  settings: SessionSettings,
+): number | undefined {
+  const current = encodeModel(settings.model.current);
+  const entry = settings.model.available.find(
+    (model) => encodeModel(model.ref) === current,
+  );
+  return entry === undefined
+    ? inferModelContextWindow(settings.model.current.modelId)
+    : modelContextWindowTokens(entry);
+}
+
+export function resolveContextWindowMaxTokens(
+  settings: SessionSettings,
+  runtimeSize?: number,
+): number | undefined {
+  const sizes = [
+    currentCatalogContextWindow(settings),
+    positiveContextWindow(runtimeSize),
+  ].filter((size): size is number => size !== undefined);
+  return sizes.length === 0 ? undefined : Math.max(...sizes);
+}
+
+function modelContextWindowTokens(
+  model: SessionSettings["model"]["available"][number],
+): number | undefined {
+  const sizes = [
+    catalogContextWindowTokens(model),
+    inferModelContextWindow(model.ref.modelId),
+  ].filter((size): size is number => size !== undefined);
+  return sizes.length === 0 ? undefined : Math.max(...sizes);
+}
+
+function inferModelContextWindow(modelId: string): number | undefined {
+  return /^GLM-5\.3(?:-Flash)?$/iu.test(modelId)
+    ? GLM_53_CONTEXT_WINDOW
+    : undefined;
+}
+
+function catalogContextWindowTokens(
+  model: SessionSettings["model"]["available"][number],
+): number | undefined {
+  return positiveContextWindow(model.contextWindow);
+}
+
+function positiveContextWindow(size: unknown): number | undefined {
+  return typeof size === "number" && Number.isFinite(size) && size > 0
+    ? Math.floor(size)
+    : undefined;
 }
 
 function catalogThinkingOptions(

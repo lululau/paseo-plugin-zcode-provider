@@ -868,6 +868,69 @@ it("publishes tool replacements, questions, and context usage without duplicatin
   });
 });
 
+it("prefers the registry model context window over ZCode's 200k runtime default", async () => {
+  const f = await fixture({
+    prepareHost(host) {
+      host.current.settings.model.available = [
+        {
+          ref: {
+            providerId: "account:bigmodel-individual-coding-plan",
+            modelId: "GLM-5.3-Flash",
+          },
+          label: "GLM-5.3-Flash",
+          providerLabel: "BigModel",
+          contextWindow: 1_000_000,
+        },
+      ];
+      host.current.settings.model.current = {
+        providerId: "account:bigmodel-individual-coding-plan",
+        modelId: "GLM-5.3-Flash",
+      };
+    },
+  });
+  const host = await f.open();
+  host.current.runtime.contextUsage = { used: 28_783, size: 200_000 };
+  await host.emit({
+    type: "snapshot",
+    snapshot: structuredClone(host.current),
+  });
+  expect((await f.wait("session.usage")).usage).toEqual({
+    contextWindowUsedTokens: 28_783,
+    contextWindowMaxTokens: 1_000_000,
+  });
+});
+
+it("maps GLM-5.3-Flash to 1M when the host omits catalog contextWindow", async () => {
+  const f = await fixture({
+    prepareHost(host) {
+      host.current.settings.model.available = [
+        {
+          ref: {
+            providerId: "account:bigmodel-individual-coding-plan",
+            modelId: "GLM-5.3-Flash",
+          },
+          label: "GLM-5.3-Flash",
+          providerLabel: "BigModel",
+        },
+      ];
+      host.current.settings.model.current = {
+        providerId: "account:bigmodel-individual-coding-plan",
+        modelId: "GLM-5.3-Flash",
+      };
+    },
+  });
+  const host = await f.open();
+  host.current.runtime.contextUsage = { used: 28_798, size: 200_000 };
+  await host.emit({
+    type: "snapshot",
+    snapshot: structuredClone(host.current),
+  });
+  expect((await f.wait("session.usage")).usage).toEqual({
+    contextWindowUsedTokens: 28_798,
+    contextWindowMaxTokens: 1_000_000,
+  });
+});
+
 it("renders TodoWrite tool calls as a native todo list instead of a tool card", async () => {
   const f = await fixture();
   const host = await f.open();

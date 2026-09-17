@@ -28,6 +28,7 @@ const ModelOptionSchema = z
     ref: ModelRefSchema,
     label: z.string().min(1),
     providerLabel: z.string().optional(),
+    contextWindow: z.number().int().nonnegative().optional(),
   })
   .passthrough();
 

@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   catalogModels,
+  currentCatalogContextWindow,
   decodeModel,
   encodeModel,
+  resolveContextWindowMaxTokens,
   historyTimeline,
   mapMcpServers,
   mapPrompt,
@@ -105,6 +107,59 @@ describe("ZCode catalog mapping", () => {
     value.thoughtLevel.current = undefined;
     value.thoughtLevel.defaultLevel = "future";
     expect(() => catalogModels(value)).toThrow(/default thinking option/u);
+  });
+
+  it("forwards the native catalog context window for the current model", () => {
+    const value = settings();
+    value.model.available[0] = {
+      ...value.model.available[0]!,
+      contextWindow: 1_000_000,
+    };
+    expect(currentCatalogContextWindow(value)).toBe(1_000_000);
+    expect(catalogModels(value)[0]).toEqual(
+      expect.objectContaining({ contextWindowMaxTokens: 1_000_000 }),
+    );
+  });
+
+  it("ignores a missing or non-positive native context window", () => {
+    expect(currentCatalogContextWindow(settings())).toBeUndefined();
+    const value = settings();
+    value.model.available[0] = {
+      ...value.model.available[0]!,
+      contextWindow: 0,
+    };
+    expect(currentCatalogContextWindow(value)).toBeUndefined();
+    expect(catalogModels(value)[0]).not.toHaveProperty("contextWindowMaxTokens");
+  });
+
+  it("treats GLM-5.3 and GLM-5.3-Flash as 1M even when ZCode reports 200k", () => {
+    const value = settings();
+    value.model.current = {
+      providerId: "account:bigmodel-individual-coding-plan",
+      modelId: "GLM-5.3-Flash",
+    };
+    value.model.available = [
+      {
+        ref: value.model.current,
+        label: "GLM-5.3-Flash",
+        providerLabel: "BigModel",
+      },
+    ];
+    expect(currentCatalogContextWindow(value)).toBe(1_000_000);
+    expect(resolveContextWindowMaxTokens(value, 200_000)).toBe(1_000_000);
+    expect(catalogModels(value)[0]).toEqual(
+      expect.objectContaining({ contextWindowMaxTokens: 1_000_000 }),
+    );
+    value.model.current = {
+      ...value.model.current,
+      modelId: "GLM-5.3",
+    };
+    value.model.available[0] = {
+      ...value.model.available[0]!,
+      ref: value.model.current,
+      label: "GLM-5.3",
+    };
+    expect(resolveContextWindowMaxTokens(value, 200_000)).toBe(1_000_000);
   });
 });
 

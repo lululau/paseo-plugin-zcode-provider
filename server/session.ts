@@ -31,6 +31,7 @@ import {
 } from "./tool-detail.js";
 import {
   catalogModels,
+  resolveContextWindowMaxTokens,
   decodeModel,
   encodeModel,
   historyTimeline,
@@ -1770,12 +1771,16 @@ export class ZCodeSession {
     snapshot: SessionSnapshot,
   ): ProviderUsage | undefined {
     const context = snapshot.runtime.contextUsage;
-    return context
-      ? {
-          contextWindowUsedTokens: context.used,
-          contextWindowMaxTokens: context.size,
-        }
-      : undefined;
+    // ZCode's runtime projection defaults size to 200k even when GLM-5.3 is 1M.
+    const size = resolveContextWindowMaxTokens(
+      snapshot.settings,
+      context?.size,
+    );
+    if (context === undefined || size === undefined) return undefined;
+    return {
+      contextWindowUsedTokens: context.used,
+      contextWindowMaxTokens: size,
+    };
   }
 
   private refreshContextSnapshot(): Promise<void> {
