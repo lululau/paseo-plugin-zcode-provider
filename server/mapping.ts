@@ -19,10 +19,12 @@ import {
   parseTodoWriteEntries,
 } from "./tool-detail.js";
 import type {
+  ModelOption,
   PermissionRequest,
   SessionSettings,
   SessionSnapshot,
   UserInputRequest,
+  ModelSelection,
 } from "./protocol/v1/host-schemas.js";
 
 export const ZCODE_PROVIDER_ID = "zcode";
@@ -57,21 +59,11 @@ export function requireMode(mode: string): string {
   return mode;
 }
 
-interface ModelRef {
-  providerId: string;
-  modelId: string;
-  variant?: string | null;
+export function encodeModel(model: ModelSelection): string {
+  return JSON.stringify([model.providerId, model.modelId, null]);
 }
 
-export function encodeModel(model: ModelRef): string {
-  return JSON.stringify([
-    model.providerId,
-    model.modelId,
-    model.variant ?? null,
-  ]);
-}
-
-export function decodeModel(value: string): ModelRef {
+export function decodeModel(value: string): ModelSelection {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -85,22 +77,23 @@ export function decodeModel(value: string): ModelRef {
     parsed[0].length === 0 ||
     typeof parsed[1] !== "string" ||
     parsed[1].length === 0 ||
-    (parsed[2] !== null && typeof parsed[2] !== "string")
+    parsed[2] !== null
   ) {
     throw new AdapterError("INVALID_CONFIGURATION", "Invalid ZCode model ID");
   }
   return {
     providerId: parsed[0],
     modelId: parsed[1],
-    ...(parsed[2] === null ? {} : { variant: parsed[2] }),
   };
 }
 
-export function catalogModels(settings: SessionSettings): ProviderModel[] {
+export function catalogModels(
+  available: readonly ModelOption[],
+  selection?: ModelSelection,
+): ProviderModel[] {
   const ids = new Set<string>();
-  const current = encodeModel(settings.model.current);
-  const thinking = catalogThinkingOptions(settings);
-  const models = settings.model.available.map((model) => {
+  const current = selection && encodeModel(selection);
+  const models = available.map((model) => {
     const id = encodeModel(model.ref);
     if (ids.has(id)) {
       throw new AdapterError(
@@ -109,6 +102,16 @@ export function catalogModels(settings: SessionSettings): ProviderModel[] {
       );
     }
     ids.add(id);
+    const levels = model.reasoningLevels;
+    const level =
+      (id === current ? selection?.options?.reasoningLevel : undefined) ??
+      levels?.at(-1);
+    if (levels && new Set(levels).size !== levels.length) {
+      throw new AdapterError(
+        "NATIVE_PROTOCOL_ERROR",
+        "Duplicate ZCode reasoning level",
+      );
+    }
     const contextWindow = modelContextWindowTokens(model);
     return {
       id,
@@ -120,52 +123,37 @@ export function catalogModels(settings: SessionSettings): ProviderModel[] {
       ...(contextWindow === undefined
         ? {}
         : { contextWindowMaxTokens: contextWindow }),
-      ...(thinking === undefined
+      ...(levels === undefined
         ? {}
         : {
-            thinkingOptions: thinking.options,
-            defaultThinkingOptionId: thinking.defaultOptionId,
+            thinkingOptions: levels.map((value) => ({
+              id: value,
+              label: value,
+              isDefault: value === level,
+            })),
+            ...(level === undefined ? {} : { defaultThinkingOptionId: level }),
           }),
     };
   });
-  if (!ids.has(current)) {
-    throw new AdapterError(
-      "NATIVE_PROTOCOL_ERROR",
-      "The current ZCode model is absent from the available model list",
-    );
-  }
-  requireMode(settings.mode.current);
   return models;
 }
 
 const GLM_53_CONTEXT_WINDOW = 1_000_000;
 
-export function currentCatalogContextWindow(
-  settings: SessionSettings,
-): number | undefined {
-  const current = encodeModel(settings.model.current);
-  const entry = settings.model.available.find(
-    (model) => encodeModel(model.ref) === current,
-  );
-  return entry === undefined
-    ? inferModelContextWindow(settings.model.current.modelId)
-    : modelContextWindowTokens(entry);
-}
-
 export function resolveContextWindowMaxTokens(
-  settings: SessionSettings,
+  catalogEntry?: ModelOption,
+  modelId?: string,
   runtimeSize?: number,
 ): number | undefined {
   const sizes = [
-    currentCatalogContextWindow(settings),
+    positiveContextWindow(catalogEntry?.contextWindow),
+    inferModelContextWindow(modelId ?? catalogEntry?.ref.modelId),
     positiveContextWindow(runtimeSize),
   ].filter((size): size is number => size !== undefined);
   return sizes.length === 0 ? undefined : Math.max(...sizes);
 }
 
-function modelContextWindowTokens(
-  model: SessionSettings["model"]["available"][number],
-): number | undefined {
+function modelContextWindowTokens(model: ModelOption): number | undefined {
   const sizes = [
     catalogContextWindowTokens(model),
     inferModelContextWindow(model.ref.modelId),
@@ -173,15 +161,13 @@ function modelContextWindowTokens(
   return sizes.length === 0 ? undefined : Math.max(...sizes);
 }
 
-function inferModelContextWindow(modelId: string): number | undefined {
-  return /^GLM-5\.3(?:-Flash)?$/iu.test(modelId)
+function inferModelContextWindow(modelId?: string): number | undefined {
+  return modelId && /^GLM-5\.3(?:-Flash)?$/iu.test(modelId)
     ? GLM_53_CONTEXT_WINDOW
     : undefined;
 }
 
-function catalogContextWindowTokens(
-  model: SessionSettings["model"]["available"][number],
-): number | undefined {
+function catalogContextWindowTokens(model: ModelOption): number | undefined {
   return positiveContextWindow(model.contextWindow);
 }
 
@@ -191,7 +177,7 @@ function positiveContextWindow(size: unknown): number | undefined {
     : undefined;
 }
 
-function catalogThinkingOptions(
+export function catalogThinkingOptions(
   settings: SessionSettings,
 ): { options: ProviderThinkingOption[]; defaultOptionId: string } | undefined {
   const thoughtLevel = settings.thoughtLevel;

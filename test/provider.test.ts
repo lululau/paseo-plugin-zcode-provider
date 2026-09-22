@@ -473,8 +473,6 @@ it("opens with environment and MCP, sets model before modes, and returns persist
       )
       .map((c) => [c.method, (c.params as { mode?: string }).mode]),
   ).toEqual([
-    ["setModel", undefined],
-    ["setThoughtLevel", undefined],
     ["setMode", "edit"],
     ["setMode", "plan"],
   ]);
@@ -490,44 +488,6 @@ it("opens with environment and MCP, sets model before modes, and returns persist
     },
     { name: "review", description: "Review", argumentHint: "<path>" },
   ]);
-});
-
-it("keeps non-default models selectable when subscribe snapshots truncate available", async () => {
-  const f = await fixture({
-    prepareHost(host) {
-      host.current.settings.model.available = [
-        {
-          ref: { providerId: "provider", modelId: "model" },
-          label: "Model",
-          providerLabel: "Provider",
-        },
-        {
-          ref: {
-            providerId: "builtin:bigmodel-coding-plan",
-            modelId: "GLM-5.3-Flash",
-          },
-          label: "GLM-5.3-Flash",
-          providerLabel: "BigModel",
-        },
-      ];
-      host.collapseModelsOnSubscribe = true;
-    },
-  });
-  const host = await f.open({
-    model: '["builtin:bigmodel-coding-plan","GLM-5.3-Flash",null]',
-  });
-  expect(
-    host.calls.find((call) => call.method === "setModel")?.params,
-  ).toMatchObject({
-    model: {
-      providerId: "builtin:bigmodel-coding-plan",
-      modelId: "GLM-5.3-Flash",
-    },
-  });
-  expect(host.current.settings.model.current).toEqual({
-    providerId: "builtin:bigmodel-coding-plan",
-    modelId: "GLM-5.3-Flash",
-  });
 });
 
 it.each(["permission", "question"] as const)(
@@ -1007,6 +967,22 @@ it("prefers the registry model context window over ZCode's 200k runtime default"
         providerId: "account:bigmodel-individual-coding-plan",
         modelId: "GLM-5.3-Flash",
       };
+      host.selectionView = {
+        revision: 1,
+        models: [
+          {
+            ref: {
+              providerId: "account:bigmodel-individual-coding-plan",
+              modelId: "GLM-5.3-Flash",
+            },
+            label: "GLM-5.3-Flash",
+            providerLabel: "BigModel",
+            contextWindow: 1_000_000,
+            reasoningLevels: ["high"],
+          },
+        ],
+        preferredSelection: host.current.settings.model.current,
+      };
     },
   });
   const host = await f.open();
@@ -1037,6 +1013,21 @@ it("maps GLM-5.3-Flash to 1M when the host omits catalog contextWindow", async (
       host.current.settings.model.current = {
         providerId: "account:bigmodel-individual-coding-plan",
         modelId: "GLM-5.3-Flash",
+      };
+      host.selectionView = {
+        revision: 1,
+        models: [
+          {
+            ref: {
+              providerId: "account:bigmodel-individual-coding-plan",
+              modelId: "GLM-5.3-Flash",
+            },
+            label: "GLM-5.3-Flash",
+            providerLabel: "BigModel",
+            reasoningLevels: ["high"],
+          },
+        ],
+        preferredSelection: host.current.settings.model.current,
       };
     },
   });
@@ -1521,7 +1512,7 @@ it("publishes reportable diagnostics when the native process fails", async () =>
   );
   const event = await f.wait("session.runtime_failed");
   expect(JSON.parse(event.error.diagnostic!)).toMatchObject({
-    appVersion: "3.11.2",
+    appVersion: "3.12.3",
     cliVersion: "0.16.5",
     platform: "darwin-arm64",
     stage: "transport",
@@ -1552,7 +1543,7 @@ it("publishes diagnostics for incompatible events after successful startup", asy
     stage: "notification",
     check: "native-event",
     operation: "event",
-    appVersion: "3.11.2",
+    appVersion: "3.12.3",
   });
   expect(JSON.stringify(event)).not.toContain("secret-unknown");
 });

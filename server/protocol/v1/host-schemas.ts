@@ -15,20 +15,24 @@ export const InitializeResultSchema = z
   })
   .passthrough();
 
-const ModelRefSchema = z
+export const ModelSelectionSchema = z
   .object({
     providerId: z.string().min(1),
     modelId: z.string().min(1),
-    variant: z.string().min(1).nullable().optional(),
+    options: z
+      .object({ reasoningLevel: z.string().min(1).optional() })
+      .strict()
+      .optional(),
   })
-  .passthrough();
+  .strict();
 
 const ModelOptionSchema = z
   .object({
-    ref: ModelRefSchema,
+    ref: ModelSelectionSchema,
     label: z.string().min(1),
     providerLabel: z.string().optional(),
     contextWindow: z.number().int().nonnegative().optional(),
+    reasoningLevels: z.array(z.string().min(1)).min(1).optional(),
   })
   .passthrough();
 
@@ -40,7 +44,7 @@ export const SessionSettingsSchema = z
   .object({
     model: z
       .object({
-        current: ModelRefSchema,
+        current: ModelSelectionSchema.optional(),
         available: z.array(ModelOptionSchema),
       })
       .passthrough(),
@@ -56,19 +60,26 @@ export const SessionSettingsSchema = z
   })
   .passthrough();
 
-export const WorkspaceStateResultSchema = z
+export const WorkspacePresentationSchema = z
   .object({
     workspace: z.object({ workspacePath: z.string().min(1) }).passthrough(),
-    settings: SessionSettingsSchema,
-    modelCatalog: z
-      .object({
-        providers: z.array(z.unknown()),
-        available: z.array(z.unknown()),
-      })
-      .passthrough()
-      .optional(),
+    mode: z.string().min(1),
   })
   .passthrough();
+
+export const ModelSelectionViewSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    models: z.array(
+      ModelOptionSchema.extend({
+        reasoningLevels: z.array(z.string().min(1)).min(1),
+      }),
+    ),
+    preferredSelection: ModelSelectionSchema.optional(),
+    effectiveSelection: ModelSelectionSchema.nullable().optional(),
+    selectionIssue: z.string().optional(),
+  })
+  .strict();
 
 export const StateUpdatedNotificationSchema = z
   .object({
@@ -93,6 +104,8 @@ export const SessionModeChangedSchema = z
   .object({
     mode: z.string().min(1),
     previousMode: z.string().min(1),
+    planEnabled: z.boolean(),
+    previousPlanEnabled: z.boolean(),
     source: z.enum(["tool", "command"]),
     toolCallId: z.string().min(1).optional(),
   })
@@ -267,7 +280,21 @@ export const ProviderRuntimeHeadersRequestSchema = z
     sessionId: z.string().min(1),
     turnId: z.string().optional(),
     workspace: z.object({ workspacePath: z.string().min(1) }).passthrough(),
-    modelRef: ModelRefSchema,
+    modelSelection: ModelSelectionSchema,
+    accountAccess: z
+      .object({
+        type: z.literal("zhipu-account"),
+        accountType: z.enum(["zai", "bigmodel"]),
+        mode: z.enum([
+          "start-plan",
+          "individual-coding-plan",
+          "team-coding-plan",
+          "off-peak",
+        ]),
+        entitled: z.boolean(),
+      })
+      .strict()
+      .optional(),
     providerId: z.string().min(1),
     reason: z.enum(["model-request", "captcha-retry"]),
   })
@@ -333,6 +360,9 @@ export const DynamicEventSchema = z.discriminatedUnion("type", [
 export type DynamicEvent = z.infer<typeof DynamicEventSchema>;
 export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 export type SessionSettings = z.infer<typeof SessionSettingsSchema>;
+export type ModelOption = z.infer<typeof ModelOptionSchema>;
+export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
+export type ModelSelectionView = z.infer<typeof ModelSelectionViewSchema>;
 export type PermissionRequest = z.infer<typeof PermissionRequestSchema>;
 export type PermissionResponse = z.infer<typeof PermissionResponseSchema>;
 export type UserInputRequest = z.infer<typeof UserInputRequestSchema>;

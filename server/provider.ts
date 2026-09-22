@@ -1,3 +1,4 @@
+import { resolveModelSelection } from "./models.js";
 import {
   PROVIDER_PROTOCOL_VERSION,
   ProviderInputSchema,
@@ -34,7 +35,13 @@ import {
   runtimeDiagnostic,
 } from "./diagnostics.js";
 import { AdapterError, isDeliveryUncertain } from "./errors.js";
-import { catalogModels, mapMcpServers, ZCODE_MODES } from "./mapping.js";
+import {
+  catalogModels,
+  decodeModel,
+  encodeModel,
+  mapMcpServers,
+  ZCODE_MODES,
+} from "./mapping.js";
 import {
   ZCodeSession,
   initializeWorkspace,
@@ -69,8 +76,16 @@ async function createHostWithInstallPath(
   signal: AbortSignal,
   getCustomInstallPath?: () => Promise<string | undefined> | string | undefined,
 ): Promise<HostBridge> {
-  const env = { ...process.env, ...environment };
-  const customPath = (await getCustomInstallPath?.())?.trim() || undefined;
+  const customPathRaw = getCustomInstallPath
+    ? await getCustomInstallPath()
+    : undefined;
+  const customPath =
+    typeof customPathRaw === "string" && customPathRaw.trim().length > 0
+      ? customPathRaw.trim()
+      : undefined;
+  const env = customPath
+    ? { ...process.env, ...environment, PASEO_ZCODE_INSTALL: customPath }
+    : { ...process.env, ...environment };
   const runtime = await discoverRuntime({
     environment: env,
     signal,
@@ -316,9 +331,15 @@ export class ZCodeConnection implements ProviderConnection {
       const cwd = await resolveWorkspace(input.cwd ?? homedir());
       const host = await this.host({});
       try {
-        const settings = await initializeWorkspace(host, cwd);
+        const { presentation, selection } = await initializeWorkspace(
+          host,
+          cwd,
+        );
         if (input.type === "catalog") {
-          const models = catalogModels(settings);
+          const models = catalogModels(
+            selection.models,
+            selection.preferredSelection,
+          );
           this.emit({
             type: "catalog",
             requestId: input.requestId,
@@ -326,10 +347,7 @@ export class ZCodeConnection implements ProviderConnection {
               models,
               modes: ZCODE_MODES,
               defaultModel: models.find((model) => model.isDefault)?.id,
-              defaultMode:
-                settings.mode.current === "plan"
-                  ? "build"
-                  : settings.mode.current,
+              defaultMode: presentation.mode,
             },
           });
         } else {
@@ -546,12 +564,37 @@ export class ZCodeConnection implements ProviderConnection {
     const host = await this.host(config.env);
     let native: ZCodeSession | undefined;
     try {
-      await initializeWorkspace(host, cwd);
+      const { selection } = await initializeWorkspace(host, cwd);
+      const requested = nativeId
+        ? undefined
+        : config.model === undefined
+          ? selection.preferredSelection
+          : decodeModel(config.model);
+      const initialModel =
+        requested &&
+        (await resolveModelSelection(host, selection, {
+          ...requested,
+          ...(config.thinkingOption !== undefined
+            ? { options: { reasoningLevel: config.thinkingOption } }
+            : {}),
+        }));
       const snapshot = await host.request(
         nativeId ? "resumeSession" : "createSession",
         {
           workspacePath: cwd,
-          ...(nativeId ? { sessionId: nativeId } : { persistence: "deferred" }),
+          ...(nativeId
+            ? { sessionId: nativeId }
+            : {
+                persistence: "deferred",
+                // session/create converts model to provider/model internally;
+                // the native create contract takes the reasoning level separately.
+                ...(initialModel
+                  ? {
+                      model: initialModel,
+                      thoughtLevel: initialModel.options?.reasoningLevel,
+                    }
+                  : {}),
+              }),
           mcpServers: mapMcpServers(config.mcpServers),
         },
         SessionSnapshotSchema,
@@ -564,15 +607,32 @@ export class ZCodeConnection implements ProviderConnection {
         logger,
         workspace: cwd,
         snapshot,
+        modelCatalog: selection.models,
         onClose() {},
       });
+      if (
+        initialModel &&
+        (native.getConfig().model !== encodeModel(initialModel) ||
+          native.getConfig().thinkingOption !==
+            initialModel.options?.reasoningLevel)
+      )
+        throw new AdapterError(
+          "NATIVE_PROTOCOL_ERROR",
+          "ZCode did not apply the requested initial model selection",
+        );
       await native.applyInitialConfig({
         ...config,
+        ...(nativeId
+          ? {}
+          : {
+              model: undefined,
+              ...(initialModel ? { thinkingOption: undefined } : {}),
+            }),
         settings: {
           ...settings,
-          plan_mode:
-            settings.plan_mode ??
-            (nativeId ? snapshot.settings.mode.current === "plan" : false),
+          ...(!nativeId && settings.plan_mode === undefined
+            ? { plan_mode: false }
+            : {}),
         },
       });
       if (this.closed) throw new Error("ZCode connection is closed");

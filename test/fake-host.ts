@@ -4,6 +4,7 @@ import type { HostBridge, HostSubscription } from "../server/host/bridge.js";
 import type {
   DynamicEvent,
   SessionSnapshot,
+  ModelSelectionView,
 } from "../server/protocol/v1/host-schemas.js";
 export function snapshot(workspace: string): SessionSnapshot {
   return {
@@ -16,12 +17,17 @@ export function snapshot(workspace: string): SessionSnapshot {
     },
     settings: {
       model: {
-        current: { providerId: "provider", modelId: "model" },
+        current: {
+          providerId: "provider",
+          modelId: "model",
+          options: { reasoningLevel: "high" },
+        },
         available: [
           {
             ref: { providerId: "provider", modelId: "model" },
             label: "Model",
             providerLabel: "Provider",
+            reasoningLevels: ["high"],
           },
         ],
       },
@@ -30,7 +36,7 @@ export function snapshot(workspace: string): SessionSnapshot {
         current: "high",
         available: [{ value: "high", label: "High" }],
       },
-      mode: { current: "plan" },
+      mode: { current: "build" },
     },
     messages: [],
     runtime: {},
@@ -52,9 +58,8 @@ export class FakeBridge implements HostBridge {
     | "completedInterrupted"
     | "error" = "draft";
   autoDrain = true;
+  planEnabled = false;
   confirmCancellation = true;
-  /** Refuse guide deliveries while running, emulating a held native queue. */
-  rejectGuideWhileRunning = false;
   queueItems: Array<{
     sourceCommandId: string;
     queueItemId: string;
@@ -92,6 +97,13 @@ export class FakeBridge implements HostBridge {
                 canStop: this.conversationPhase === "running",
               },
               queue: { autoDrain: this.autoDrain, items: this.queueItems },
+              config: {
+                mode: this.current.settings.mode.current as
+                  | "build"
+                  | "edit"
+                  | "yolo",
+                planEnabled: this.planEnabled,
+              },
             },
           },
         },
@@ -99,19 +111,38 @@ export class FakeBridge implements HostBridge {
     });
   }
   readonly diagnostic = {
-    appVersion: "3.11.2",
+    appVersion: "3.12.3",
     cliVersion: "0.16.5",
     platform: "darwin-arm64",
   };
   readonly calls: Array<{ method: string; params: unknown }> = [];
   private handler: ((event: DynamicEvent) => Promise<void> | void) | undefined;
 
-  constructor(public current: SessionSnapshot) {}
+  selectionView: ModelSelectionView;
+
+  constructor(public current: SessionSnapshot) {
+    this.selectionView = {
+      revision: 1,
+      models: current.settings.model.available.map((model) => ({
+        ...model,
+        reasoningLevels: ["high"],
+      })),
+      preferredSelection: current.settings.model.current,
+    };
+  }
+
+  sessionSnapshot(): SessionSnapshot {
+    const result = structuredClone(this.current);
+    // Native session reads and settings responses only describe the current model.
+    const current = result.settings.model.current;
+    result.settings.model.available = current
+      ? [{ ref: current, label: current.modelId }]
+      : [];
+    return result;
+  }
 
   emitModeOnSet = false;
-  collapseModelsOnSetMode = false;
-  /** Reproduce host subscribe snapshots that omit non-current models. */
-  collapseModelsOnSubscribe = false;
+  rejectGuideWhileRunning = false;
 
   async request<Schema extends z.ZodType>(
     method: string,
@@ -122,18 +153,34 @@ export class FakeBridge implements HostBridge {
     let result: unknown = null;
     if (method === "initialize") {
       result = { available: true };
-    } else if (method === "readWorkspaceState") {
+    } else if (method === "readWorkspacePresentation") {
+      result = { workspace: this.current.session.workspace, mode: "build" };
+    } else if (method === "readModelSelection") {
+      const selection = (
+        params as { selection?: ModelSelectionView["preferredSelection"] }
+      ).selection;
       result = {
-        workspace: this.current.session.workspace,
-        settings: this.current.settings,
-        modelCatalog: { providers: [{}], available: [] },
+        ...this.selectionView,
+        ...(selection ? { effectiveSelection: selection } : {}),
       };
-    } else if (
-      method === "createSession" ||
-      method === "resumeSession" ||
-      method === "readSession"
-    ) {
-      result = this.current;
+    } else if (method === "createSession" || method === "resumeSession") {
+      if (method === "createSession") {
+        const model = (
+          params as { model?: ModelSelectionView["preferredSelection"] }
+        ).model;
+        const thoughtLevel = (params as { thoughtLevel?: string }).thoughtLevel;
+        this.current.settings.model.current = model && {
+          providerId: model.providerId,
+          modelId: model.modelId,
+          ...(thoughtLevel
+            ? { options: { reasoningLevel: thoughtLevel } }
+            : {}),
+        };
+        this.syncThinkingOptions();
+      }
+      result = this.sessionSnapshot();
+    } else if (method === "readSession") {
+      result = this.sessionSnapshot();
     } else if (method === "listSessions") {
       result = [this.current.session];
     } else if (method === "sendConversationCommandV4") {
@@ -232,23 +279,13 @@ export class FakeBridge implements HostBridge {
       };
     } else if (method === "setMode") {
       const value = params as { mode: string };
-      this.current = {
-        ...this.current,
-        settings: {
-          ...this.current.settings,
-          mode: { current: value.mode },
-        },
-      };
-      if (this.collapseModelsOnSetMode) {
-        this.current.settings.model.available =
-          this.current.settings.model.available.filter(
-            (entry) =>
-              entry.ref.modelId === this.current.settings.model.current.modelId,
-          );
-      }
-      result = this.current;
+      this.planEnabled = value.mode === "plan";
+      if (value.mode !== "plan")
+        this.current.settings.mode.current = value.mode;
+      await this.emitConversation();
+      result = this.sessionSnapshot();
       if (this.emitModeOnSet) {
-        await this.emit(stateUpdate({ mode: { current: value.mode } }));
+        await this.emit(stateUpdate({ mode: this.current.settings.mode }));
       }
     } else if (method === "setModel") {
       this.current.settings.model.current = (
@@ -256,14 +293,34 @@ export class FakeBridge implements HostBridge {
           model: SessionSnapshot["settings"]["model"]["current"];
         }
       ).model;
-      result = this.current;
+      this.syncThinkingOptions();
+      result = this.sessionSnapshot();
     } else if (method === "setThoughtLevel") {
       this.current.settings.thoughtLevel.current = (
         params as { thoughtLevel: string }
       ).thoughtLevel;
-      result = this.current;
+      this.current.settings.model.current!.options = {
+        reasoningLevel: this.current.settings.thoughtLevel.current,
+      };
+      result = this.sessionSnapshot();
     }
     return resultSchema.parse(structuredClone(result));
+  }
+
+  private syncThinkingOptions(): void {
+    const selected = this.current.settings.model.current;
+    const levels = selected
+      ? this.selectionView.models.find(
+          (model) =>
+            model.ref.providerId === selected.providerId &&
+            model.ref.modelId === selected.modelId,
+        )!.reasoningLevels
+      : [];
+    this.current.settings.thoughtLevel = {
+      enabled: levels.length > 0,
+      current: selected?.options?.reasoningLevel,
+      available: levels.map((value) => ({ value, label: value })),
+    };
   }
 
   async subscribe(
@@ -277,25 +334,7 @@ export class FakeBridge implements HostBridge {
   ): Promise<HostSubscription> {
     this.calls.push({ method: "subscribe", params: null });
     this.handler = handler;
-    if (this.collapseModelsOnSubscribe) {
-      const current = this.current.settings.model.current;
-      this.current = {
-        ...this.current,
-        settings: {
-          ...this.current.settings,
-          model: {
-            ...this.current.settings.model,
-            available: this.current.settings.model.available.filter(
-              (entry) =>
-                entry.ref.providerId === current.providerId &&
-                entry.ref.modelId === current.modelId &&
-                (entry.ref.variant ?? null) === (current.variant ?? null),
-            ),
-          },
-        },
-      };
-      await this.emit({ type: "snapshot", snapshot: this.current });
-    }
+    await this.emit({ type: "snapshot", snapshot: this.sessionSnapshot() });
     await this.emitConversation();
     return {
       dispose: async () => {
@@ -326,6 +365,7 @@ export class FakeBridge implements HostBridge {
       event.event.type === "session.updated" &&
       typeof event.event.payload.mode === "string"
     ) {
+      this.planEnabled = event.event.payload.planEnabled as boolean;
       this.current = {
         ...this.current,
         settings: {
@@ -336,6 +376,12 @@ export class FakeBridge implements HostBridge {
     }
     if (this.handler === undefined) throw new Error("not subscribed");
     await this.handler(event);
+    if (
+      event.type === "session.event" &&
+      event.event.type === "session.updated" &&
+      "planEnabled" in event.event.payload
+    )
+      await this.emitConversation();
     if (
       event.type === "session.event" &&
       event.event.type === "turn.completed"
@@ -377,8 +423,10 @@ export function modeEvent(
       timestamp: seq,
       deliveryKind: "desktop-continuous",
       payload: {
-        mode,
-        previousMode,
+        mode: mode === "plan" ? previousMode : mode,
+        previousMode: previousMode === "plan" ? mode : previousMode,
+        planEnabled: mode === "plan",
+        previousPlanEnabled: previousMode === "plan",
         source: "tool",
         toolCallId: "exit-plan",
       },

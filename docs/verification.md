@@ -1,5 +1,51 @@
 # 検証記録
 
+## 2026-09-18: 実モデル E2E と PR CI
+
+- `npm run test:e2e` を追加。既存のモデル・Plan と追加指示・添付・停止・復元のスクリプトを順番に実行します。通常の `npm test` には含めません。実ホストと **Paseo 0.9.0** の公開 Provider SDK を使い、daemon / UI は起動しません。
+- ユーザー指定の **Z.ai Coding Plan** (`https://api.z.ai/api/coding/paas/v4`) と既存の `GLM_API_KEY` を使用。既定モデルは `GLM-5.3-Flash`、モデル変更の相手は `GLM-5.3`。API キーをモード `0600` の一時 personal provider 設定へ書き、公式の `ZCODE_DATA_BASE_DIR` / `ZCODE_STORAGE_DIR` でデータを分離します。子プロセス環境にはキーを渡さず、Computer Use helper は無効にしています。
+- 最初の隔離実行は macOS の長い既定一時パスによりネイティブ CLI の `listen EINVAL` が発生しました。公式 CLI が `TMPDIR/znr-<UUID>.sock` を作ることとホストの終了診断から原因を確認し、短い `/tmp` 配下に変更しました。実際の Unix ソケットを作る回帰テストも追加しました。
+- 自動テストで認証未設定時の失敗、環境変数の制限、設定ファイルの権限、成功・失敗時の削除を確認。型検査、ビルド、Prettier が成功しました。
+- macOS arm64 / ZCode **3.12.3** / CLI **0.16.5** で隔離 E2E が成功。2モデルの変更と推論レベル、独立 Plan、build / edit / yolo の承認、edit の却下、別接続での Plan とモデルの復元、追加指示、添付キュー、単一の完了通知、停止、キャンセル入力を除いた履歴4件の復元、再開後の応答、正常終了を確認しました。通常の ZCode 認証や会話は使用していません。
+- 公式ホスト起動中に E2E ランナーへ `SIGTERM` を送り、非ゼロ終了・Provider 接続終了・その実行の一時認証ディレクトリ削除を確認しました。
+- CI に独立した **Real ZCode E2E** ジョブを追加。同一リポジトリの PR、`main` push、手動起動で実行し、secret が渡らない fork / Dependabot PR は除外します。`pull_request_target` は使いません。公式 Ubuntu 向け deb **3.12.3-7463** を SHA-256 `631fbd69fcefe5d57c607bbfd047bb7a474af6017464681b99ccb7b15749c60e` で検証し、パッケージが宣言する依存関係とともにインストールします。
+- [ADR 12: 実モデルE2Eを隔離した認証設定でPRのCIに組み込む](adr/0012-実モデルe2eを隔離した認証設定でprのciに組み込む.md) は Accepted。
+
+**未検証範囲:** workflow はまだ push していないため、GitHub-hosted Ubuntu 上の実行結果は未確認です。公式 deb の取得・依存宣言・チェックサムと workflow の静的検証までを確認しました。Linux 実行、Paseo daemon / UI、アプリ再起動、認証期限切れはローカル E2E の成功に含めません。
+
+## 2026-09-18: Issue #16 の ZCode 3.12.3 対応
+
+[Issue #16](https://github.com/supermomonga/paseo-plugin-zcode-provider/issues/16) に対応。主対象は **Paseo 0.9.0**、実機は **ZCode 3.12.3 / 3.14.3、macOS arm64、Node.js 22** です。最低 ZCode 本体を 3.12.3 へ上げ、CLI は 0.16.5、開発 SDK は 0.9.0、Paseo の最低要件は 0.8.0 を維持しました。
+
+### 契約変更と調査根拠
+
+- `libs/zcode/3.12.3/zcode.cjs` と、インストール済みアプリの `out/host/index.js`・同梱モジュールを確認しました。旧 `readWorkspaceState` を `model-selection.getView` と `readWorkspacePresentation` に置き換えています。
+- 生のモデル選択応答はプロバイダーの API キーやヘッダーを含みます。Electron 内で候補の識別子・表示名・推論レベル・選択結果へ絞ってからブリッジへ出力し、秘密値が含まれないことをテストしました。
+- native の `projectAppModelOption` と同じく、モデルごとに提示された推論レベルの最後を既定値とします。`getView({selection})` の解決結果・エラーを確認し、別モデル・別レベルへの暗黙置換を拒否します。
+- 実機の初期化タイムアウトは、3.12.3 の `init-local` に必須の `zcodeBuiltinProviderConfigFilePath` が欠けていたことが原因でした。公式 main の `resolveZCodeBuiltinProviderConfigFilePath` と同じ同梱パスを渡し、OS別のパス解決・読取確認を追加しました。
+- 新規作成時、native `session/create` は `setModel` に provider/model 文字列を渡し、モデル内の推論レベルを落とします。公式の作成呼び出しと同様、解決したレベルを別の `thoughtLevel` 引数にも渡し、初期値を照合しています。
+- Plan の状態は V4 `config.planEnabled`、編集モードは `config.mode` を使用します。最終状態の到着を待ち、旧 snapshot の到着で Plan を上書きしません。V4 `sendText` にモデル選択・編集モード・Plan を付けます。認証更新通知の `modelSelection` と任意の `accountAccess` も検証します。
+- ZCode 3.14.3 での待機キュー自動昇格（`session.updated` 経由の昇格通知、昇格後のネイティブターン ID 移行、完了済みネイティブターン境界の考慮）に対応しました。
+
+### 自動・結合検証
+
+- `npm run typecheck`、`npm test`（18ファイル・280テスト）、`npm run build`、`npm run format:check`、`git diff --check` が成功。
+- **Paseo 0.9.0** の実コンパイラ・Provider アダプターで `test:upstream` が成功。server/client のコンパイルと登録、モデル変更、Plan 設定と復元、追加指示・添付キュー、Provider 差し替え、履歴再生と再送信を確認しました。Git 準備は `NODE_ENV` 未設定 / `production` の両方で成功しました。
+- [ADR 11](adr/0011-zcode-3-12-3のモデル選択と独立plan状態を採用する.md) を Accepted とし、ADR 5・7・9 を Amends / Amended by で補足、生成目次を更新しました。
+
+### 実 ZCode 検証
+
+- `test:runtime`: 初期化、3モデル・3編集モード・既定モデルあり、正常終了が成功。
+- `test:steering-runtime`: 実モデルによる追加指示の反映、添付内容の処理、開始・完了の単一通知、待機入力付き停止、消費済みユーザー入力4件の復元、キャンセルした入力の不在、復元後の応答と正常終了が成功。
+
+検証済み artifact を以下へ更新しました。
+
+| ファイル        | SHA-256                                                            |
+| --------------- | ------------------------------------------------------------------ |
+| CLI             | `da61b0663336a65f7cce3dec223678794ccaa58158e304fc0d97b695434a8f01` |
+| host index      | `c8f7b2e50f2c8f7eeb030a377cfc4779b2a0e2037af2239e065157dc2e3e422e` |
+| host RPC module | `718fdf848fb173372264fd40c0d155d3953cb737a4439c64ff1ef7c2a33f9c82` |
+
 ## 2026-09-12: V4ステアリングと添付メッセージの待機送信
 
 [ADR 9](adr/0009-v4入力受付とネイティブ待機キューを一つのpaseo実行へ対応付ける.md)でADR 2を補足しました。Paseo本体・公開SDK・ZCodeのファイルは変更していません。

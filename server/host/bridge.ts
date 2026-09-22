@@ -23,10 +23,6 @@ import {
   type DynamicEvent,
 } from "../protocol/v1/host-schemas.js";
 import { adaptHostRequest } from "./contract.js";
-import {
-  PASEO_BUILTIN_PROVIDER_CONFIG_ENV,
-  requireBuiltinProviderConfigPath,
-} from "./builtin-config.js";
 import { ZCODE_HOST_BRIDGE_SOURCE } from "./runtime-source.js";
 
 const SubscriptionResponseSchema = z
@@ -122,10 +118,6 @@ export class ZCodeHostBridge implements HostBridge {
         "Supported ZCode artifact has no resolved host contract",
       );
     }
-    const builtinConfigPath = requireBuiltinProviderConfigPath(
-      runtime.paths.hostArchive,
-      environment,
-    );
     const child = spawn(
       runtime.paths.executable,
       ["-e", ZCODE_HOST_BRIDGE_SOURCE],
@@ -138,7 +130,8 @@ export class ZCodeHostBridge implements HostBridge {
           PASEO_ZCODE_HOST_RPC_MODULE: host.hostRpcModule,
           PASEO_ZCODE_RPC_EXPORTS: JSON.stringify(host.rpcExports),
           PASEO_ZCODE_HOST_PROTOCOL: JSON.stringify(host.protocol),
-          [PASEO_BUILTIN_PROVIDER_CONFIG_ENV]: builtinConfigPath,
+          PASEO_ZCODE_BUILTIN_PROVIDER_CONFIG:
+            runtime.paths.builtinProviderConfig,
         },
         stdio: ["pipe", "pipe", "pipe"],
       },

@@ -42,10 +42,6 @@ async function fixture(target: string) {
     constants: { R_OK: 4, X_OK: 1 },
   };
   vi.doMock("node:fs/promises", () => files);
-  vi.doMock("node:fs", () => ({
-    accessSync: vi.fn(() => {}),
-    constants: { R_OK: 4 },
-  }));
   const inspection = {
     hostIndexSha256: artifact.hostIndexSha256,
     hostRpcModuleSha256: artifact.hostRpcModuleSha256,
@@ -63,7 +59,7 @@ async function fixture(target: string) {
       kill: ReturnType<typeof vi.fn>;
     }
   > = [];
-  let packageVersion = "3.11.2";
+  let packageVersion = "3.12.3";
   let stall = false;
   let onSpawn = () => {};
   const spawn = vi.fn(
@@ -178,6 +174,18 @@ describe("runtime discovery on each OS", () => {
             ? "/opt/ZCode"
             : "/Applications/ZCode.app";
       expect(runtime.paths.installRoot).toBe(root);
+      expect(runtime.paths.builtinProviderConfig).toBe(
+        f.path.join(
+          root,
+          f.platform === "darwin"
+            ? "Contents/Resources/config/provider/zcode-builtin.json"
+            : "resources/config/provider/zcode-builtin.json",
+        ),
+      );
+      expect(f.files.access).toHaveBeenCalledWith(
+        runtime.paths.builtinProviderConfig,
+        4,
+      );
       expect(runtime.paths.executable).toBe(
         f.path.join(
           root,
@@ -217,6 +225,8 @@ describe("runtime discovery on each OS", () => {
             TEST_ENV: "retained",
             ELECTRON_RUN_AS_NODE: "1",
             PASEO_ZCODE_HOST_INDEX: runtime.resolvedHost?.hostIndex,
+            PASEO_ZCODE_BUILTIN_PROVIDER_CONFIG:
+              runtime.paths.builtinProviderConfig,
           }),
         }),
       ]);
@@ -248,6 +258,7 @@ describe("runtime discovery on each OS", () => {
         metadata: `${root}\\resources\\glm\\.node-bundle-meta.json`,
         appPackage: `${root}\\resources\\app.asar\\package.json`,
         hostArchive: `${root}\\resources\\app.asar`,
+        builtinProviderConfig: `${root}\\resources\\config\\provider\\zcode-builtin.json`,
       });
       expect(runtime.compatibility).toBe("supported");
       expect(f.spawn).toHaveBeenCalledWith(
@@ -384,9 +395,9 @@ describe("runtime discovery on each OS", () => {
     await expect(f.discoverRuntime(options)).rejects.toMatchObject({
       code: "RUNTIME_DISCOVERY_FAILED",
     });
-    f.setVersion("3.11.3");
+    f.setVersion("3.12.4");
     expect((await f.discoverRuntime(options)).compatibility).toBe("supported");
-    f.setVersion("3.11.2");
+    f.setVersion("3.12.3");
     f.inspection.hostIndexSha256 = "0".repeat(64);
     const runtime = await f.discoverRuntime(options);
     expect(runtime.compatibility).toBe("supported");
@@ -395,7 +406,7 @@ describe("runtime discovery on each OS", () => {
     const older = await f.discoverRuntime(options);
     expect(older.compatibility).toBe("unsupported");
     expect(() => f.assertRuntimeSupported(older)).toThrow();
-    f.setVersion("3.11.2");
+    f.setVersion("3.12.3");
     f.inspection.rpcExports.protocol = "";
     await expect(f.discoverRuntime(options)).rejects.toMatchObject({
       code: "RUNTIME_DISCOVERY_FAILED",

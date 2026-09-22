@@ -9,8 +9,10 @@ export default function contribute(server: PluginServerContext): () => void {
   const getCustomInstallPath = async () => {
     try {
       const state = await settings.read();
-      return state.status === "ready"
-        ? state.values.customInstallPath
+      return state.status === "ready" &&
+        typeof state.values.customInstallPath === "string" &&
+        state.values.customInstallPath.trim().length > 0
+        ? state.values.customInstallPath.trim()
         : undefined;
     } catch {
       return undefined;
