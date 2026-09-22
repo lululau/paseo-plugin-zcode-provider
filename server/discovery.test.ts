@@ -42,6 +42,10 @@ async function fixture(target: string) {
     constants: { R_OK: 4, X_OK: 1 },
   };
   vi.doMock("node:fs/promises", () => files);
+  vi.doMock("node:fs", () => ({
+    accessSync: vi.fn(() => {}),
+    constants: { R_OK: 4 },
+  }));
   const inspection = {
     hostIndexSha256: artifact.hostIndexSha256,
     hostRpcModuleSha256: artifact.hostRpcModuleSha256,

@@ -129,7 +129,9 @@ describe("ZCode catalog mapping", () => {
       contextWindow: 0,
     };
     expect(currentCatalogContextWindow(value)).toBeUndefined();
-    expect(catalogModels(value)[0]).not.toHaveProperty("contextWindowMaxTokens");
+    expect(catalogModels(value)[0]).not.toHaveProperty(
+      "contextWindowMaxTokens",
+    );
   });
 
   it("treats GLM-5.3 and GLM-5.3-Flash as 1M even when ZCode reports 200k", () => {

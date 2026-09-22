@@ -1,5 +1,6 @@
 {
   "id": "zcode-provider",
+  "description": "ZCode provider plugin for Paseo",
   "requirements": { "paseo": ">=0.8.0" },
   "build": [["npm", "ci", "--include=dev"]]
 }

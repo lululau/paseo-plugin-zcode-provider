@@ -44,6 +44,15 @@
 
 将来のpatch・minor・major更新は模擬テストです。実機で確認したZCodeは3.11.2のみであり、新しい正式版の動作保証ではありません。Linux / Windows / macOS x64の実機、実モデルへの送信、アプリUIは今回検証していません。データ形式を保った意味の変更は検出できるとは限りません。
 
+## 2026-09-22: Paseo 0.9.0 正式版への対応
+
+Paseo のリリースタグ `v0.9.0`、commit `7f7e60bcbbfe57bf5250b10d01c5f97847b43db0` と、npm 公開済みの `@getpaseo/plugin`・`@getpaseo/client`・`@getpaseo/protocol` の `0.9.0` を使用しました。
+
+- SDK 3パッケージとロックファイルを `0.9.0` に更新し、`paseo-plugin.json` に `description` を追加（`requirements` は `>=0.8.0` を維持）。
+- `npm run typecheck`、`npm run build`、`npm test` が成功。
+- `npm run test:upstream -- /Users/liuxiang/cascode/github.com/paseo` が成功。Paseo 0.9.0 の実コンパイラ、実アダプターによるプロバイダー登録、モデル取得、送信、ストリーミング、使用量更新、プロバイダー差し替え、保存情報からの再開、ステアリング検証（テキスト・添付キュー）を確認しました。
+- `npm run check:paseo-releases -- --dry-run` が `No Paseo release newer than 0.9.0` となることを確認。
+
 ## 2026-09-11: Paseo 0.8.0 正式版への対応
 
 対象は [Issue #7](https://github.com/supermomonga/paseo-plugin-zcode-provider/issues/7)。Paseo のリリースタグ `v0.8.0`、commit `b8e24677e12b226c7c38c1c3a40649daa9f1152f` と、npm 公開済みの `@getpaseo/plugin`・`@getpaseo/client`・`@getpaseo/protocol` の `0.8.0` を使用しました。
