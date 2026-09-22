@@ -492,13 +492,26 @@ async function checkGitPreparation({
       name === "@getpaseo/plugin/server/provider" ? sdk : nodeRequire(name),
     );
     let registered;
+    let registeredSettings;
     const dispose = contribution.default({
       registerProvider(provider) {
         registered = provider;
       },
+      registerSettings(definition) {
+        registeredSettings = definition;
+        return {
+          read() {
+            return definition.schema.parse({});
+          },
+          subscribe() {
+            return () => {};
+          },
+        };
+      },
       handle() {},
     });
     assert.equal(registered.id, "zcode");
+    assert.ok(registeredSettings, "The settings must be registered");
     assert.equal(typeof dispose, "function");
     await dispose();
 
@@ -514,11 +527,26 @@ async function checkGitPreparation({
       if (name === "react-native")
         return { Text: () => null, View: () => null };
       if (name === "@getpaseo/plugin/client")
-        return { useRpc: () => async () => ({}) };
+        return {
+          useRpc: () => async () => ({}),
+          useSettings: () => ({
+            status: "ready",
+            values: {},
+            revision: "1",
+            saving: false,
+            saveError: null,
+            save: async () => true,
+            reset: async () => true,
+            reload: async () => {},
+          }),
+          useHosts: () => [],
+        };
       if (name === "@getpaseo/plugin/client/ui")
         return {
+          ExternalLink: () => null,
           SettingsAction: () => null,
           SettingsCard: () => null,
+          SettingsInput: () => null,
           SettingsRow: () => null,
           SettingsSection: () => null,
         };

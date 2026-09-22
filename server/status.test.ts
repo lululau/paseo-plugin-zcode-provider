@@ -43,12 +43,14 @@ function dependencies(
     discover?: () => Promise<DiscoveredRuntime>;
     smoke?: () => Promise<RuntimeSmokeResult>;
     environment?: NodeJS.ProcessEnv;
+    getCustomInstallPath?: () => string | undefined;
   } = {},
 ) {
   return {
     environment: overrides.environment ?? {},
     sessionsDirectory: "/state/zcode/sessions",
     providerVersion: "9.9.9",
+    getCustomInstallPath: overrides.getCustomInstallPath,
     discover: overrides.discover ?? (async () => runtime()),
     smoke:
       overrides.smoke ??
@@ -118,6 +120,36 @@ describe("ZCode diagnostics handler", () => {
         doctorPassed: true,
         authentication: "unknown",
       },
+    });
+  });
+
+  it("uses custom install path from settings and reports settings source", async () => {
+    const discover = vi.fn(async () =>
+      runtime({
+        paths: {
+          ...runtime().paths,
+          installRoot: "/settings/ZCode",
+        },
+      }),
+    );
+    const handler = createDiagnosticsHandler(
+      dependencies({
+        discover,
+        getCustomInstallPath: () => "/settings/ZCode",
+        environment: { PASEO_ZCODE_INSTALL: "/env/ZCode" },
+      }),
+    );
+
+    const result = await handler({ smoke: false });
+
+    expect(discover).toHaveBeenCalledWith({
+      environment: { PASEO_ZCODE_INSTALL: "/env/ZCode" },
+      installRoot: "/settings/ZCode",
+    });
+    expect(result).toMatchObject({
+      status: "ready",
+      installRoot: "/settings/ZCode",
+      installRootSource: "settings",
     });
   });
 

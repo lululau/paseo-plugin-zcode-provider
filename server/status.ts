@@ -19,11 +19,19 @@ export interface DiagnosticsDependencies {
   readonly providerVersion?: string;
   readonly discover?: typeof discoverRuntime;
   readonly smoke?: typeof runRuntimeSmoke;
+  readonly getCustomInstallPath?: () =>
+    | Promise<string | undefined>
+    | string
+    | undefined;
 }
 
 function installRootSource(
   environment: NodeJS.ProcessEnv,
-): "environment" | "default" {
+  customInstallPath?: string,
+): "settings" | "environment" | "default" {
+  if (customInstallPath && customInstallPath.trim().length > 0) {
+    return "settings";
+  }
   return environment.PASEO_ZCODE_INSTALL === undefined
     ? "default"
     : "environment";
@@ -57,7 +65,12 @@ export function createDiagnosticsHandler(
     input: RpcInput<typeof zcodeDiagnostics>,
   ): Promise<DiagnosticsResult> => {
     try {
-      const runtime: DiscoveredRuntime = await discover({ environment });
+      const customPath =
+        (await dependencies.getCustomInstallPath?.())?.trim() || undefined;
+      const runtime: DiscoveredRuntime = await discover({
+        environment,
+        installRoot: customPath,
+      });
       const checked = input.smoke
         ? await smoke(runtime, environment)
         : undefined;
@@ -65,7 +78,7 @@ export function createDiagnosticsHandler(
         status: "ready",
         providerVersion,
         installRoot: runtime.paths.installRoot,
-        installRootSource: installRootSource(environment),
+        installRootSource: installRootSource(environment, customPath),
         platform: runtime.identity.platform,
         ...(runtime.identity.appVersion === undefined
           ? {}

@@ -64,12 +64,18 @@ export type BridgeFactory = (
   signal: AbortSignal,
 ) => Promise<HostBridge>;
 
-async function createHost(
+async function createHostWithInstallPath(
   environment: Readonly<Record<string, string>>,
   signal: AbortSignal,
+  getCustomInstallPath?: () => Promise<string | undefined> | string | undefined,
 ): Promise<HostBridge> {
   const env = { ...process.env, ...environment };
-  const runtime = await discoverRuntime({ environment: env, signal });
+  const customPath = (await getCustomInstallPath?.())?.trim() || undefined;
+  const runtime = await discoverRuntime({
+    environment: env,
+    signal,
+    installRoot: customPath,
+  });
   assertRuntimeSupported(runtime);
   try {
     const smoke = await runRuntimeSmoke(runtime, env, signal);
@@ -90,6 +96,13 @@ async function createHost(
   }
 }
 
+async function createHost(
+  environment: Readonly<Record<string, string>>,
+  signal: AbortSignal,
+): Promise<HostBridge> {
+  return createHostWithInstallPath(environment, signal);
+}
+
 const optionsSchema = z.object({}).strict();
 const settingsSchema = z.object({ plan_mode: z.boolean().optional() }).strict();
 
@@ -107,9 +120,14 @@ interface SessionEntry {
 }
 
 export function createZCodeProvider(
-  bridgeFactory: BridgeFactory = createHost,
+  bridgeFactory?: BridgeFactory,
   persistenceStore = new SessionPersistenceStore(),
+  getCustomInstallPath?: () => Promise<string | undefined> | string | undefined,
 ): ProviderRegistration {
+  const factory =
+    bridgeFactory ??
+    ((env, signal) =>
+      createHostWithInstallPath(env, signal, getCustomInstallPath));
   return {
     id: "zcode",
     label: "ZCode",
@@ -121,7 +139,7 @@ export function createZCodeProvider(
         throw new Error("ZCode requires provider protocol version 1");
       return new ZCodeConnection(
         negotiateProviderCapabilities(request.capabilities, CAPABILITIES),
-        bridgeFactory,
+        factory,
         persistenceStore,
       );
     },

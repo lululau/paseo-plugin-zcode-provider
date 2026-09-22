@@ -2,9 +2,27 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { createZCodeProvider } from "./server/provider.js";
 import { createDiagnosticsHandler } from "./server/status.js";
 import { zcodeDiagnostics } from "./shared/diagnostics.js";
+import { zcodeSettings } from "./shared/settings.js";
 
 export default function contribute(server: PluginServerContext): () => void {
-  server.registerProvider(createZCodeProvider());
-  server.handle(zcodeDiagnostics, createDiagnosticsHandler());
+  const settings = server.registerSettings(zcodeSettings);
+  const getCustomInstallPath = async () => {
+    try {
+      const state = await settings.read();
+      return state.status === "ready"
+        ? state.values.customInstallPath
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  server.registerProvider(
+    createZCodeProvider(undefined, undefined, getCustomInstallPath),
+  );
+  server.handle(
+    zcodeDiagnostics,
+    createDiagnosticsHandler({ getCustomInstallPath }),
+  );
   return () => {};
 }

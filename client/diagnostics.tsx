@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { Text, View } from "react-native";
-import { type PluginSurfaceProps, useRpc } from "@getpaseo/plugin/client";
 import {
+  type PluginSurfaceProps,
+  useHosts,
+  useRpc,
+  useSettings,
+} from "@getpaseo/plugin/client";
+import {
+  ExternalLink,
   SettingsAction,
   SettingsCard,
+  SettingsInput,
   SettingsRow,
   SettingsSection,
 } from "@getpaseo/plugin/client/ui";
@@ -11,6 +18,7 @@ import {
   zcodeDiagnostics,
   type DiagnosticsResult,
 } from "../shared/diagnostics";
+import { zcodeSettings } from "../shared/settings";
 
 function Value({
   children,
@@ -31,11 +39,156 @@ function Value({
   );
 }
 
+function HostsSection({
+  theme,
+  compact,
+}: {
+  theme: PluginSurfaceProps["theme"];
+  compact: boolean;
+}) {
+  const hosts = useHosts();
+  if (!hosts || hosts.length <= 1) {
+    return null;
+  }
+  return (
+    <SettingsSection title="Connected hosts">
+      <SettingsCard>
+        {hosts.map((host) => (
+          <SettingsRow
+            key={host.serverId}
+            label={host.label}
+            hint={`Server ID: ${host.serverId}`}
+          >
+            <Value
+              color={
+                host.status === "online"
+                  ? theme.colors.statusSuccess
+                  : host.status === "error"
+                    ? theme.colors.statusDanger
+                    : theme.colors.foregroundMuted
+              }
+              compact={compact}
+            >
+              {host.status.toUpperCase()}
+            </Value>
+          </SettingsRow>
+        ))}
+      </SettingsCard>
+    </SettingsSection>
+  );
+}
+
+function ConfigurationSection({
+  onSaved,
+  compact,
+}: {
+  onSaved(): void;
+  compact: boolean;
+}) {
+  const settings = useSettings(zcodeSettings);
+  const [inputPath, setInputPath] = useState<string>("");
+
+  useEffect(() => {
+    if (settings.status === "ready") {
+      setInputPath(settings.values.customInstallPath ?? "");
+    }
+  }, [
+    settings.status,
+    settings.status === "ready" ? settings.values.customInstallPath : undefined,
+  ]);
+
+  const handleSave = async () => {
+    if (settings.status !== "ready") return;
+    const trimmed = inputPath.trim();
+    const ok = await settings.save(
+      { customInstallPath: trimmed },
+      settings.revision,
+    );
+    if (ok) {
+      onSaved();
+    }
+  };
+
+  const handleReset = async () => {
+    if (settings.status !== "ready") return;
+    const ok = await settings.reset();
+    if (ok) {
+      setInputPath("");
+      onSaved();
+    }
+  };
+
+  if (settings.status === "loading") {
+    return (
+      <SettingsSection title="Custom ZCode path">
+        <SettingsCard>
+          <SettingsRow label="Settings">
+            <Text style={{ fontSize: compact ? 13 : 14 }}>
+              Loading settings…
+            </Text>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+    );
+  }
+
+  if (settings.status === "error" || settings.status === "invalid") {
+    return (
+      <SettingsSection title="Custom ZCode path">
+        <SettingsCard>
+          <SettingsRow label="Error">
+            <Text style={{ fontSize: compact ? 13 : 14 }}>
+              {settings.error}
+            </Text>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+    );
+  }
+
+  const hasCustom = Boolean(
+    settings.values.customInstallPath &&
+      settings.values.customInstallPath.trim().length > 0,
+  );
+
+  return (
+    <SettingsSection title="Custom ZCode path">
+      <SettingsCard>
+        <SettingsInput
+          label="Installation path"
+          hint="Override the ZCode application directory. Leave empty to use auto-detection or PASEO_ZCODE_INSTALL."
+          placeholder="/Applications/ZCode.app"
+          initialValue={inputPath}
+          onChangeText={setInputPath}
+          disabled={settings.saving}
+          error={settings.saveError}
+        />
+      </SettingsCard>
+      <SettingsAction
+        label="Apply custom path"
+        actionLabel={settings.saving ? "Saving…" : "Save path"}
+        disabled={settings.saving}
+        onPress={() => void handleSave()}
+      />
+      {hasCustom ? (
+        <SettingsAction
+          label="Reset to default"
+          actionLabel="Clear custom path"
+          disabled={settings.saving}
+          onPress={() => void handleReset()}
+        />
+      ) : null}
+    </SettingsSection>
+  );
+}
+
 function Installation({ result, theme, compact }: SectionProps) {
   const source =
-    result.installRootSource === "environment"
-      ? "PASEO_ZCODE_INSTALL"
-      : "Default location";
+    result.installRootSource === "settings"
+      ? "Settings (custom path)"
+      : result.installRootSource === "environment"
+        ? "PASEO_ZCODE_INSTALL"
+        : "Default location";
   return (
     <SettingsSection title="ZCode installation">
       <SettingsCard>
@@ -199,6 +352,63 @@ function SessionStorage({ result, theme, compact }: SectionProps) {
   );
 }
 
+function LinksSection({
+  theme,
+  compact,
+}: {
+  theme: PluginSurfaceProps["theme"];
+  compact: boolean;
+}) {
+  return (
+    <SettingsSection title="Resources & Links">
+      <SettingsCard>
+        <SettingsRow label="Official website" hint="Download and documentation">
+          <ExternalLink href="https://zcode.z.ai">
+            <Text
+              style={{
+                color: theme.colors.accent,
+                fontSize: compact ? 13 : 14,
+                textDecorationLine: "underline",
+              }}
+            >
+              zcode.z.ai
+            </Text>
+          </ExternalLink>
+        </SettingsRow>
+        <SettingsRow label="Changelog" hint="ZCode version history">
+          <ExternalLink href="https://zcode.z.ai/en/changelog">
+            <Text
+              style={{
+                color: theme.colors.accent,
+                fontSize: compact ? 13 : 14,
+                textDecorationLine: "underline",
+              }}
+            >
+              Release notes
+            </Text>
+          </ExternalLink>
+        </SettingsRow>
+        <SettingsRow
+          label="Plugin repository"
+          hint="Report issues or contribute"
+        >
+          <ExternalLink href="https://github.com/paseo-plugins/paseo-plugin-zcode-provider">
+            <Text
+              style={{
+                color: theme.colors.accent,
+                fontSize: compact ? 13 : 14,
+                textDecorationLine: "underline",
+              }}
+            >
+              GitHub repo
+            </Text>
+          </ExternalLink>
+        </SettingsRow>
+      </SettingsCard>
+    </SettingsSection>
+  );
+}
+
 interface SectionProps {
   result: Extract<DiagnosticsResult, { status: "ready" }>;
   theme: PluginSurfaceProps["theme"];
@@ -222,7 +432,9 @@ function ReadyView({
 }) {
   return (
     <View style={{ gap: compact ? 16 : 24 }}>
+      <HostsSection theme={theme} compact={compact} />
       <Installation result={result} theme={theme} compact={compact} />
+      <ConfigurationSection onSaved={onCheck} compact={compact} />
       <Compatibility result={result} theme={theme} compact={compact} />
       <HostCheck
         result={result}
@@ -232,6 +444,7 @@ function ReadyView({
         compact={compact}
       />
       <SessionStorage result={result} theme={theme} compact={compact} />
+      <LinksSection theme={theme} compact={compact} />
       <SettingsSection title="Detection">
         <SettingsAction
           label="Installed ZCode"
@@ -259,6 +472,8 @@ function FailedView({
 }) {
   return (
     <View style={{ gap: compact ? 16 : 24 }}>
+      <HostsSection theme={theme} compact={compact} />
+      <ConfigurationSection onSaved={onCheck} compact={compact} />
       <SettingsSection title="ZCode diagnostics">
         <SettingsCard>
           <SettingsRow label="Result">
@@ -296,6 +511,42 @@ function FailedView({
           disabled={busy}
           onPress={onCheck}
         />
+      </SettingsSection>
+      <SettingsSection title="Troubleshooting & Resources">
+        <SettingsCard>
+          <SettingsRow
+            label="Download ZCode"
+            hint="Download and install the official ZCode application if not found."
+          >
+            <ExternalLink href="https://zcode.z.ai">
+              <Text
+                style={{
+                  color: theme.colors.accent,
+                  fontSize: compact ? 13 : 14,
+                  textDecorationLine: "underline",
+                }}
+              >
+                Visit zcode.z.ai
+              </Text>
+            </ExternalLink>
+          </SettingsRow>
+          <SettingsRow
+            label="Documentation & Issues"
+            hint="Check issues or report a problem with the provider plugin."
+          >
+            <ExternalLink href="https://github.com/paseo-plugins/paseo-plugin-zcode-provider">
+              <Text
+                style={{
+                  color: theme.colors.accent,
+                  fontSize: compact ? 13 : 14,
+                  textDecorationLine: "underline",
+                }}
+              >
+                GitHub repository
+              </Text>
+            </ExternalLink>
+          </SettingsRow>
+        </SettingsCard>
       </SettingsSection>
     </View>
   );

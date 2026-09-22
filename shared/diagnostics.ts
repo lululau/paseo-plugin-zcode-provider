@@ -17,7 +17,7 @@ export const diagnosticsResultSchema = z.discriminatedUnion("status", [
       status: z.literal("ready"),
       providerVersion: z.string(),
       installRoot: z.string(),
-      installRootSource: z.enum(["environment", "default"]),
+      installRootSource: z.enum(["settings", "environment", "default"]),
       platform: z.string(),
       appVersion: z.string().optional(),
       cliVersion: z.string().optional(),
