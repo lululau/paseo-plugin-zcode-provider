@@ -90,6 +90,7 @@ interface ActiveTurn {
     }
   >;
   completedNativeTurns: Set<string>;
+  backgroundNativeTurns: Set<string>;
   inFlight: number;
   announced: boolean;
   buffered: NativeSessionEvent[];
@@ -754,6 +755,7 @@ export class ZCodeSession {
       tools: new Map(),
       inputs: new Map(),
       completedNativeTurns: new Set(),
+      backgroundNativeTurns: new Set(),
       inFlight: 0,
       announced: false,
       buffered: [],
@@ -1037,11 +1039,6 @@ export class ZCodeSession {
           }
           await this.maybeComplete(this.active);
         }
-        if (!this.active && this.conversation.state && !this.conversation.idle)
-          throw new AdapterError(
-            "NATIVE_PROTOCOL_ERROR",
-            "ZCode has native work outside the active public run",
-          );
         this.stateChanged();
         return;
       }
@@ -1200,48 +1197,25 @@ export class ZCodeSession {
     }
     if (KNOWN_NOOP_EVENTS.has(event.type)) return;
     if (event.turnId && this.cancelledNativeTurns.has(event.turnId)) return;
+    if (event.type === "turn.started") {
+      this.handleTurnStarted(event, active);
+      return;
+    }
     if (active === undefined) {
       throw new AdapterError(
         "NATIVE_PROTOCOL_ERROR",
         "ZCode emitted a turn event while idle",
       );
     }
-    if (event.type === "turn.started") {
-      const started = z
-        .object({
-          inputId: z.string().optional(),
-          messageId: z.string().optional(),
-        })
-        .passthrough()
-        .parse(event.payload);
-      const inputId = started.inputId;
-      if (inputId && started.messageId)
-        this.nativeMessageIds.set(inputId, started.messageId);
-      const input = inputId ? active.inputs.get(inputId) : undefined;
-      if (
-        !input ||
-        !event.turnId ||
-        active.completedNativeTurns.has(event.turnId)
-      )
-        throw new AdapterError(
-          "NATIVE_PROTOCOL_ERROR",
-          "ZCode started an unrequested turn",
-        );
-      if (
-        active.nativeTurnId &&
-        active.nativeTurnId !== event.turnId &&
-        !active.completedNativeTurns.has(active.nativeTurnId)
-      )
-        throw new AdapterError(
-          "NATIVE_PROTOCOL_ERROR",
-          "ZCode started overlapping native turns",
-        );
-      active.nativeTurnId = event.turnId;
-      active.lastTerminal = undefined;
-      input.consumed = true;
-      input.nativeTurnId = event.turnId;
-      // Delimit text across native turns even when the public turn is unchanged.
-      this.emit({ type: "timeline_boundary" });
+    if (
+      event.turnId &&
+      active.nativeTurnId &&
+      event.turnId !== active.nativeTurnId &&
+      active.backgroundNativeTurns.has(event.turnId) &&
+      (event.type === "turn.completed" || event.type === "turn.failed")
+    ) {
+      active.completedNativeTurns.add(event.turnId);
+      active.backgroundNativeTurns.delete(event.turnId);
       return;
     }
     if (event.type === "turn.steerQueued") {
@@ -1302,7 +1276,10 @@ export class ZCodeSession {
         this.emit({ type: "timeline_boundary" });
       } else {
         active.nativeTurnId ??= event.turnId;
-        if (active.nativeTurnId !== event.turnId) {
+        if (
+          active.nativeTurnId !== event.turnId &&
+          !active.backgroundNativeTurns.has(event.turnId)
+        ) {
           throw new AdapterError(
             "NATIVE_PROTOCOL_ERROR",
             "ZCode event turn ID changed",
@@ -1352,6 +1329,87 @@ export class ZCodeSession {
       "NATIVE_PROTOCOL_ERROR",
       `Unsupported ZCode event: ${event.type}`,
     );
+  }
+
+  private handleTurnStarted(
+    event: SessionEvent,
+    active: ActiveTurn | undefined,
+  ): void {
+    const started = z
+      .object({
+        inputId: z.string().optional(),
+        messageId: z.string().optional(),
+        backgroundSource: z.enum(["bash", "subagent"]).optional(),
+      })
+      .passthrough()
+      .parse(event.payload);
+    const background = started.backgroundSource !== undefined;
+    const inputId = started.inputId;
+    if (inputId && started.messageId)
+      this.nativeMessageIds.set(inputId, started.messageId);
+    if (active === undefined) {
+      if (!background || !event.turnId) {
+        throw new AdapterError(
+          "NATIVE_PROTOCOL_ERROR",
+          "ZCode emitted a turn event while idle",
+        );
+      }
+      active = this.createActive();
+      this.active = active;
+      active.nativeTurnId = event.turnId;
+      active.announced = true;
+      this.emit({ type: "turn_started", turnId: active.id });
+      this.emit({ type: "timeline_boundary" });
+      return;
+    }
+    const input = inputId ? active.inputs.get(inputId) : undefined;
+    if (
+      !input ||
+      !event.turnId ||
+      active.completedNativeTurns.has(event.turnId)
+    ) {
+      if (!background || !event.turnId) {
+        throw new AdapterError(
+          "NATIVE_PROTOCOL_ERROR",
+          "ZCode started an unrequested turn",
+        );
+      }
+      this.attachBackgroundTurn(active, event.turnId);
+      return;
+    }
+    if (
+      active.nativeTurnId &&
+      active.nativeTurnId !== event.turnId &&
+      !active.completedNativeTurns.has(active.nativeTurnId)
+    ) {
+      if (!background) {
+        throw new AdapterError(
+          "NATIVE_PROTOCOL_ERROR",
+          "ZCode started overlapping native turns",
+        );
+      }
+      this.attachBackgroundTurn(active, event.turnId);
+      return;
+    }
+    active.nativeTurnId = event.turnId;
+    active.lastTerminal = undefined;
+    input.consumed = true;
+    input.nativeTurnId = event.turnId;
+    this.emit({ type: "timeline_boundary" });
+  }
+
+  private attachBackgroundTurn(active: ActiveTurn, turnId: string): void {
+    if (
+      active.nativeTurnId &&
+      active.nativeTurnId !== turnId &&
+      !active.completedNativeTurns.has(active.nativeTurnId)
+    ) {
+      active.backgroundNativeTurns.add(turnId);
+      return;
+    }
+    active.nativeTurnId = turnId;
+    active.lastTerminal = undefined;
+    this.emit({ type: "timeline_boundary" });
   }
 
   private handleStreaming(
@@ -1609,6 +1667,8 @@ export class ZCodeSession {
     if (active.settled) return;
     if (active.nativeTurnId) this.cancelledNativeTurns.add(active.nativeTurnId);
     for (const id of active.completedNativeTurns)
+      this.cancelledNativeTurns.add(id);
+    for (const id of active.backgroundNativeTurns)
       this.cancelledNativeTurns.add(id);
     if (!active.silent) {
       this.closeOpenTools(active, "canceled");

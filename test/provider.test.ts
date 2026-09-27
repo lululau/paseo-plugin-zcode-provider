@@ -2284,3 +2284,96 @@ it("accepts steering while final usage is being read without completing the old 
     f.events.filter((e) => e.type === "session.turn").map((e) => e.state),
   ).toEqual(["started", "completed"]);
 });
+
+it("keeps the session open when ZCode starts a background notification turn while idle", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  const event = nativeEvents(host);
+  await f.prompt();
+  await event("turn.started", { inputId: commandCalls(host)[0]!.commandId });
+  await event("turn.completed", { resultType: "success" });
+  await vi.waitFor(() =>
+    expect(
+      f.events.filter((e) => e.type === "session.turn").map((e) => e.state),
+    ).toEqual(["started", "completed"]),
+  );
+  host.conversationPhase = "running";
+  await host.emitConversation();
+  await event(
+    "turn.started",
+    { backgroundSource: "bash", input: "notify" },
+    "native-bg",
+  );
+  await event(
+    "model.streaming",
+    { kind: "text_delta", delta: "background done" },
+    "native-bg",
+  );
+  await event("turn.completed", { resultType: "success" }, "native-bg");
+  await vi.waitFor(() =>
+    expect(
+      f.events.filter((e) => e.type === "session.turn").map((e) => e.state),
+    ).toEqual(["started", "completed", "started", "completed"]),
+  );
+  expect(f.events.some((e) => e.type === "session.runtime_failed")).toBe(false);
+  expect(
+    host.calls.filter((c) => c.method === "cancelGeneration"),
+  ).toHaveLength(0);
+  expect(
+    f.events
+      .filter(
+        (e): e is Extract<ProviderEvent, { type: "timeline.item" }> =>
+          e.type === "timeline.item" && e.item.type === "assistant_message",
+      )
+      .map((e) => e.item),
+  ).toMatchObject([{ text: "background done" }]);
+});
+
+it("still fails an unrequested native turn that is not a background wakeup", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  const event = nativeEvents(host);
+  await f.prompt();
+  await event("turn.started", { inputId: commandCalls(host)[0]!.commandId });
+  await event("turn.completed", { resultType: "success" });
+  await vi.waitFor(() =>
+    expect(
+      f.events.filter((e) => e.type === "session.turn").map((e) => e.state),
+    ).toEqual(["started", "completed"]),
+  );
+  await event("turn.started", { inputId: "unknown" }, "native-rogue");
+  await f.wait("session.runtime_failed");
+});
+
+it("does not fail when a background wakeup overlaps the requested native turn", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  const event = nativeEvents(host);
+  await f.prompt();
+  await event("turn.started", { inputId: commandCalls(host)[0]!.commandId });
+  host.conversationPhase = "running";
+  await event(
+    "turn.started",
+    { backgroundSource: "subagent", input: "notify" },
+    "native-bg",
+  );
+  await event("model.streaming", { kind: "text_delta", delta: "main" });
+  await event(
+    "model.streaming",
+    { kind: "text_delta", delta: "bg" },
+    "native-bg",
+  );
+  await event("turn.completed", { resultType: "success" }, "native-bg");
+  host.conversationPhase = "running";
+  await host.emitConversation();
+  await event("turn.completed", { resultType: "success" });
+  await vi.waitFor(() =>
+    expect(
+      f.events.filter((e) => e.type === "session.turn").map((e) => e.state),
+    ).toEqual(["started", "completed"]),
+  );
+  expect(f.events.some((e) => e.type === "session.runtime_failed")).toBe(false);
+  expect(
+    host.calls.filter((c) => c.method === "cancelGeneration"),
+  ).toHaveLength(0);
+});
