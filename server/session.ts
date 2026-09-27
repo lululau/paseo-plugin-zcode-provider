@@ -103,7 +103,7 @@ interface ActiveTurn {
       name: string;
       input: unknown;
       output: unknown;
-      status: "running" | "completed" | "failed";
+      status: "running" | "completed" | "canceled" | "failed";
     }
   >;
   cancelled: boolean;
@@ -1468,6 +1468,19 @@ export class ZCodeSession {
     );
   }
 
+  private closeOpenTools(
+    active: ActiveTurn,
+    status: "completed" | "canceled",
+  ): void {
+    // Paseo shimmers a tool badge while its timeline status is running.
+    // A finished turn must leave every call in a terminal status.
+    for (const [callId, tool] of active.tools) {
+      if (tool.status !== "running") continue;
+      tool.status = status;
+      this.pushTool(active, callId, tool);
+    }
+  }
+
   private pushTool(
     active: ActiveTurn,
     callId: string,
@@ -1475,7 +1488,7 @@ export class ZCodeSession {
       name: string;
       input: unknown;
       output: unknown;
-      status: "running" | "completed" | "failed";
+      status: "running" | "completed" | "canceled" | "failed";
     },
   ): void {
     // TodoWrite renders as a native todo list instead of a tool card. Events
@@ -1578,6 +1591,7 @@ export class ZCodeSession {
       this.finishCancelled(active);
       return;
     }
+    this.closeOpenTools(active, "completed");
     this.emit({
       type: "usage_updated",
       usage: active.usage,
@@ -1597,6 +1611,7 @@ export class ZCodeSession {
     for (const id of active.completedNativeTurns)
       this.cancelledNativeTurns.add(id);
     if (!active.silent) {
+      this.closeOpenTools(active, "canceled");
       this.emit({
         type: "turn_canceled",
         reason: "cancelled",
@@ -1616,6 +1631,7 @@ export class ZCodeSession {
     if (report) this.logger.error("zcode.turn.failed", error);
     const message = safeError(error);
     if (!active.silent) {
+      this.closeOpenTools(active, "canceled");
       this.emit({
         type: "turn_failed",
         error: message,

@@ -949,6 +949,101 @@ it("publishes tool replacements, questions, and context usage without duplicatin
   });
 });
 
+it("stops a skill badge that is still running when the turn ends", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  await f.prompt();
+  for (const [index, payload] of [
+    {
+      kind: "started",
+      toolCallId: "skill-1",
+      toolName: "Skill",
+      input: { skill: "send-to-me" },
+    },
+    {
+      kind: "started",
+      toolCallId: "bash-1",
+      toolName: "Bash",
+      input: { command: "echo hi" },
+    },
+    {
+      kind: "result",
+      toolCallId: "bash-1",
+      result: { stdout: "hi\n" },
+    },
+  ].entries())
+    await host.emit({
+      type: "session.event",
+      event: {
+        type: "tool.updated",
+        eventId: `open-tool-${index}`,
+        sessionId: "session-1",
+        seq: index + 1,
+        timestamp: 1,
+        deliveryKind: "desktop-continuous",
+        payload,
+      },
+    });
+  await completeTurn(host, 4);
+  const tools = f.events.filter(
+    (event): event is Extract<ProviderEvent, { type: "timeline.item" }> =>
+      event.type === "timeline.item" && event.item.type === "tool_call",
+  );
+  expect(tools.map((event) => event.item)).toMatchObject([
+    { id: "tool:skill-1", status: "running" },
+    { id: "tool:bash-1", status: "running" },
+    { id: "tool:bash-1", status: "completed" },
+    {
+      id: "tool:skill-1",
+      status: "completed",
+      detail: { type: "plain_text", label: "Skill: send-to-me" },
+    },
+  ]);
+});
+
+it("cancels a skill badge that is still running when the turn is cancelled", async () => {
+  const f = await fixture();
+  const host = await f.open();
+  await f.prompt();
+  await host.emit({
+    type: "session.event",
+    event: {
+      type: "tool.updated",
+      eventId: "skill-started",
+      sessionId: "session-1",
+      seq: 1,
+      timestamp: 1,
+      deliveryKind: "desktop-continuous",
+      payload: {
+        kind: "started",
+        toolCallId: "skill-1",
+        toolName: "Skill",
+        input: { skill: "send-to-me" },
+      },
+    },
+  });
+  await host.emit({
+    type: "session.event",
+    event: {
+      eventId: "turn-cancelled",
+      sessionId: "session-1",
+      seq: 2,
+      timestamp: 2,
+      deliveryKind: "desktop-continuous",
+      type: "turn.completed",
+      payload: { resultType: "cancelled" },
+    },
+  });
+  const tools = f.events.filter(
+    (event): event is Extract<ProviderEvent, { type: "timeline.item" }> =>
+      event.type === "timeline.item" && event.item.type === "tool_call",
+  );
+  expect(tools.map((event) => event.item)).toMatchObject([
+    { id: "tool:skill-1", status: "running" },
+    { id: "tool:skill-1", status: "canceled" },
+  ]);
+});
+
 it("prefers the registry model context window over ZCode's 200k runtime default", async () => {
   const f = await fixture({
     prepareHost(host) {
