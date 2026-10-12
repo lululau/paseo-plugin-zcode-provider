@@ -35,7 +35,7 @@ import {
   formatDiagnostic,
   runtimeDiagnostic,
 } from "./diagnostics.js";
-import { AdapterError } from "./errors.js";
+import { AdapterError, isDeliveryUncertain } from "./errors.js";
 import {
   catalogModels,
   decodeModel,
@@ -219,7 +219,11 @@ export class ZCodeConnection implements ProviderConnection {
         if (input.type === "session.prompt") {
           const promptEntry = entry ?? this.sessions.get(input.sessionId);
           if (promptEntry?.messages.get(input.prompt.clientMessageId)) return;
-          promptEntry?.messages.set(input.prompt.clientMessageId, true);
+          // An input that never reached ZCode may be resent under the same ID,
+          // as Paseo does when a steer falls back to replacing the turn.
+          if (isDeliveryUncertain(cause))
+            promptEntry?.messages.set(input.prompt.clientMessageId, true);
+          else promptEntry?.messages.delete(input.prompt.clientMessageId);
           this.emit({
             type: "session.prompt_result",
             sessionId: input.sessionId,

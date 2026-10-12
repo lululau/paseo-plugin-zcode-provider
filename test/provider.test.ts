@@ -180,6 +180,31 @@ it("rejects failed admission without destroying a running turn", async () => {
   expect(f.host.closed).toBe(false);
   await completeTurn(f.host);
 });
+it("frees a rejected message ID so Paseo's replace fallback can resend it", async () => {
+  const f = await fixture();
+  await f.open();
+  await f.prompt();
+  f.host.failAdmission = "rejected";
+  expect(await f.prompt("m2")).toMatchObject({ result: { type: "failed" } });
+  f.host.failAdmission = undefined;
+  f.events.length = 0;
+  expect(await f.prompt("m2")).toMatchObject({ result: { type: "steer" } });
+  expect(
+    f.host.calls.filter((c) => c.params?.envelope?.type === "sendText"),
+  ).toHaveLength(3);
+  await completeTurn(f.host);
+});
+it("keeps a possibly delivered message ID reserved", async () => {
+  const f = await fixture();
+  await f.open();
+  f.host.failAdmission = "unknown";
+  expect(await f.prompt()).toMatchObject({ result: { type: "failed" } });
+  f.host.failAdmission = undefined;
+  await expect(f.prompt()).rejects.toThrow();
+  expect(
+    f.host.calls.filter((c) => c.params?.envelope?.type === "sendText"),
+  ).toHaveLength(1);
+});
 it("targets stop by foreground execution ID and cancels queued input", async () => {
   const f = await fixture();
   await f.open();
