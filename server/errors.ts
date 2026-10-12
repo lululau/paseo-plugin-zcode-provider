@@ -33,4 +33,14 @@ export class AdapterError extends Error {
     super(message, options);
   }
 }
+
+// ZCode may already own an input whose send failed after leaving the plugin.
+// Its clientMessageId stays reserved so the same message never runs twice.
+const uncertainDeliveries = new WeakSet<object>();
+export function markDeliveryUncertain(error: unknown): void {
+  if (error instanceof Error) uncertainDeliveries.add(error);
+}
+export function isDeliveryUncertain(error: unknown): boolean {
+  return error instanceof Error && uncertainDeliveries.has(error);
+}
 import type { RuntimeDiagnostic } from "./diagnostics.js";

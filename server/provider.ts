@@ -35,7 +35,7 @@ import {
   formatDiagnostic,
   runtimeDiagnostic,
 } from "./diagnostics.js";
-import { AdapterError } from "./errors.js";
+import { AdapterError, isDeliveryUncertain } from "./errors.js";
 import {
   catalogModels,
   decodeModel,
@@ -221,8 +221,11 @@ export class ZCodeConnection implements ProviderConnection {
           const promptEntry = entry ?? this.sessions.get(input.sessionId);
           if (promptEntry?.messages.get(input.prompt.clientMessageId)) return;
           // The input was not admitted. Paseo's interrupt-and-replace fallback
-          // for an unavailable steer resends it with the same ID.
-          promptEntry?.messages.delete(input.prompt.clientMessageId);
+          // for an unavailable steer resends it with the same ID, but an input
+          // whose delivery is uncertain stays reserved.
+          if (isDeliveryUncertain(cause))
+            promptEntry?.messages.set(input.prompt.clientMessageId, true);
+          else promptEntry?.messages.delete(input.prompt.clientMessageId);
           this.emit({
             type: "session.prompt_result",
             sessionId: input.sessionId,
