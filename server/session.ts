@@ -51,7 +51,7 @@ import type {
   NativeSessionEvent,
   NativeTimelineEntry,
 } from "./session-types.js";
-import { AdapterError } from "./errors.js";
+import { AdapterError, markDeliveryUncertain } from "./errors.js";
 import { diagnosticError, formatDiagnostic } from "./diagnostics.js";
 import { turnFailure } from "./turn-failure.js";
 import type { TimelinePreferences } from "../shared/timeline.js";
@@ -918,7 +918,10 @@ export class ZCodeSession {
         run.inputs.delete(commandId);
         this.admissions.delete(commandId);
         if (!previous && run.inputs.size === 0) this.active = undefined;
-      } else this.runtimeFailed(diagnosticError(error, this.bridge.diagnostic));
+      } else {
+        markDeliveryUncertain(error);
+        this.runtimeFailed(diagnosticError(error, this.bridge.diagnostic));
+      }
       throw error;
     } finally {
       run.inFlight--;
