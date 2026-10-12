@@ -17,6 +17,7 @@ import type {
 } from "./vendor/zcode/packages/shared/src/zcode-protocol-v4/snapshot.js";
 import { AdapterError } from "./errors.js";
 import { jsonValue, record, planMarkdown } from "./mapping.js";
+import { toolDetail } from "./tool-detail.js";
 
 export function rowTimeline(
   row: ConversationRow,
@@ -54,7 +55,8 @@ export function rowTimeline(
     case "reasoning":
       return { id, type: "reasoning", text: row.text };
     case "toolCall": {
-      const input = record(row.input);
+      // ZCode projects TodoWrite into state.plan, presented as the todo list.
+      if (row.toolName === "TodoWrite" && row.status !== "error") return;
       const truncated =
         !!row.output?.truncated ||
         (row.output?.display?.kind === "bash_output" &&
@@ -64,40 +66,20 @@ export function rowTimeline(
         (truncated
           ? "\n[ZCode truncated this output; the full result has not been loaded.]"
           : "");
-      let detail: ProviderToolCallDetail;
-      if (row.toolName === "Bash" && typeof input.command === "string")
-        detail = { type: "shell", command: input.command, output: text };
-      else if (row.toolName === "Read" && typeof input.file_path === "string")
-        detail = { type: "read", filePath: input.file_path, content: text };
-      else if (row.toolName === "Write" && typeof input.file_path === "string")
-        detail = {
-          type: "write",
-          filePath: input.file_path,
-          ...(typeof input.content === "string"
-            ? { content: input.content }
-            : {}),
-        };
-      else if (row.toolName === "Edit" && typeof input.file_path === "string")
-        detail = {
-          type: "edit",
-          filePath: input.file_path,
-          ...(typeof input.old_string === "string"
-            ? { oldString: input.old_string }
-            : {}),
-          ...(typeof input.new_string === "string"
-            ? { newString: input.new_string }
-            : {}),
-        };
-      else
-        detail = {
-          type: "unknown",
-          input: jsonValue(row.input ?? row.inputText),
-          output: jsonValue({
-            text,
-            ...(row.output?.display ? { display: row.output.display } : {}),
-            truncated,
-          }),
-        };
+      const detail: ProviderToolCallDetail = toolDetail(
+        row.toolName,
+        row.input,
+        text,
+        row.output?.display,
+      ) ?? {
+        type: "unknown",
+        input: jsonValue(row.input ?? row.inputText),
+        output: jsonValue({
+          text,
+          ...(row.output?.display ? { display: row.output.display } : {}),
+          truncated,
+        }),
+      };
       const base = {
         id,
         type: "tool_call" as const,
