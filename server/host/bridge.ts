@@ -63,7 +63,9 @@ const nativeViewSchema = z.object({
   providers: z.array(
     z.object({
       providerId: z.string(),
-      providerName: z.string(),
+      // Official selection views omit the name when the provider is identified
+      // by templateId. A missing name is not a protocol failure.
+      providerName: z.string().nullish(),
       models: z.array(
         z.object({
           modelId: z.string(),
@@ -89,7 +91,7 @@ function projectModelSelection(value: unknown) {
       provider.models.map((model) => ({
         ref: { providerId: provider.providerId, modelId: model.modelId },
         label: model.modelId,
-        providerLabel: provider.providerName,
+        providerLabel: provider.providerName?.trim() || provider.providerId,
         reasoningLevels: model.config.optionSpecs.reasoningLevel.values,
       })),
     ),

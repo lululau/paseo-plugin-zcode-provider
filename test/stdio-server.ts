@@ -108,6 +108,68 @@ if (scenario === "bad-hello") {
         },
       }),
     );
+    server.registerChannel(
+      "model-selection",
+      ProxyChannel.fromService({
+        async getView() {
+          return {
+            revision: 4,
+            providers: [
+              {
+                providerId: "template-only",
+                templateId: "zai",
+                models: [
+                  {
+                    modelId: "glm-a",
+                    config: {
+                      optionSpecs: {
+                        reasoningLevel: { values: ["low", "high"] },
+                      },
+                    },
+                  },
+                ],
+              },
+              {
+                providerId: "unnamed",
+                providerName: null,
+                models: [
+                  {
+                    modelId: "glm-b",
+                    config: {
+                      optionSpecs: { reasoningLevel: { values: ["max"] } },
+                    },
+                  },
+                ],
+              },
+              {
+                providerId: "blank",
+                providerName: "  ",
+                models: [
+                  {
+                    modelId: "glm-c",
+                    config: {
+                      optionSpecs: { reasoningLevel: { values: ["mid"] } },
+                    },
+                  },
+                ],
+              },
+              {
+                providerId: "named",
+                providerName: "Named Plan",
+                models: [
+                  {
+                    modelId: "glm-d",
+                    config: {
+                      optionSpecs: { reasoningLevel: { values: ["x"] } },
+                    },
+                  },
+                ],
+              },
+            ],
+          };
+        },
+      }),
+    );
     process.stdin.on("data", (b) => input.fire(VSBuffer.wrap(b)));
     if (header.length > end + 1)
       input.fire(VSBuffer.wrap(header.subarray(end + 1)));

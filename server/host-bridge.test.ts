@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { ZCodeHostBridge } from "./host/bridge.js";
+import { ModelSelectionViewSchema } from "./host/schemas.js";
 import type { DiscoveredRuntime } from "./discovery/types.js";
 import { logger } from "./logger.js";
 let directory: string, runtime: DiscoveredRuntime;
@@ -93,6 +94,44 @@ it.each(["bad-hello", "bad-v4"])(
     }
   },
 );
+it("catalogs models when a provider has no display name", async () => {
+  const bridge = ZCodeHostBridge.start(runtime, logger);
+  try {
+    await expect(
+      bridge.request("readModelSelection", {}, ModelSelectionViewSchema),
+    ).resolves.toEqual({
+      revision: 4,
+      models: [
+        {
+          ref: { providerId: "template-only", modelId: "glm-a" },
+          label: "glm-a",
+          providerLabel: "template-only",
+          reasoningLevels: ["low", "high"],
+        },
+        {
+          ref: { providerId: "unnamed", modelId: "glm-b" },
+          label: "glm-b",
+          providerLabel: "unnamed",
+          reasoningLevels: ["max"],
+        },
+        {
+          ref: { providerId: "blank", modelId: "glm-c" },
+          label: "glm-c",
+          providerLabel: "blank",
+          reasoningLevels: ["mid"],
+        },
+        {
+          ref: { providerId: "named", modelId: "glm-d" },
+          label: "glm-d",
+          providerLabel: "Named Plan",
+          reasoningLevels: ["x"],
+        },
+      ],
+    });
+  } finally {
+    await bridge.close();
+  }
+});
 it("passes positional arguments to settings services", async () => {
   const bridge = ZCodeHostBridge.start(runtime, logger);
   try {
