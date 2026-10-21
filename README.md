@@ -10,10 +10,10 @@ This is an unofficial plugin. It is not endorsed or maintained by ZCode or Z.ai.
 
 | Setting        | Requirement                                                                                                                             |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Paseo          | 0.8.0 or later; development SDK 0.11.0-beta.5                                                                                           |
+| Paseo          | 0.8.0 or later; development SDK 0.12.0                                                                                                  |
 | Plugin Node.js | 22.12.0 or later (the Paseo daemon's runtime)                                                                                           |
 | Managed setup  | darwin-arm64, linux-x64, linux-arm64, win-x64, win-arm64                                                                                |
-| ZCode          | Managed: 3.14.3 (release `3.14.3-paseo.1`) with Node.js 24.21.0. Overrides: stable Server 3.14.0+ / Agent 0.16.9+ with Node.js 24.14.0+ |
+| ZCode          | Managed: 3.16.2 (release `3.16.2-paseo.1`) with Node.js 24.21.0. Overrides: stable Server 3.14.0+ / Agent 0.16.9+ with Node.js 24.14.0+ |
 
 ## Installation
 
@@ -26,7 +26,7 @@ paseo plugin ls
 
 You can also paste `npm:paseo-plugin-zcode-provider` into **Settings → Plugins → Plugin source**. npm packages require Paseo 0.9.0 or later and npm on the daemon host. Paseo installs the released version and compiles the plugin. Update with `paseo plugin update zcode-provider`. Plugins execute with the daemon user's permissions.
 
-To follow the `main` branch instead, install the Git repository with `paseo plugin add supermomonga/paseo-plugin-zcode-provider`. Paseo prepares the checkout with `npm ci`.
+To follow the `main` branch instead, install the Git repository with `paseo plugin add github:supermomonga/paseo-plugin-zcode-provider` (Paseo 0.9.0 or later). Since Paseo 0.11.0, the form without `github:` looks the plugin up in Paseo's plugin registry, which does not list it. Paseo prepares the checkout with `npm ci`.
 
 ## Setup
 
@@ -35,7 +35,7 @@ Open **Settings → Plugins → zcode-provider → Settings**. The screen has tw
 On the **Runtime** tab, choose **Download and install**. The screen lists every download, its SHA-256, size and license before you start. Setup runs on the machine hosting the daemon:
 
 - Node.js 24.21.0 from nodejs.org.
-- The ZCode runtime 3.14.3 from this repository's [releases](https://github.com/supermomonga/paseo-plugin-zcode-provider/releases/tag/zcode-runtime-v3.14.3-paseo.1) (`3.14.3-paseo.1`). ZCode does not publish its integrated CLI, so this is an **unofficial build** of the public source with the patches in [patches/zcode](patches/zcode) applied (ADR 19), made and verified by CI. The patches hide Computer Use and Browser Use, which cannot run here. It is not endorsed or maintained by ZCode or Z.ai.
+- The ZCode runtime 3.16.2 from this repository's [releases](https://github.com/supermomonga/paseo-plugin-zcode-provider/releases/tag/zcode-runtime-v3.16.2-paseo.1) (`3.16.2-paseo.1`). ZCode does not publish its integrated CLI, so this is an **unofficial build** of the public source with the patches in [patches/zcode](patches/zcode) applied (ADR 19), made and verified by CI. The patches hide Computer Use, Browser Use and Visualize, which cannot run or render here. It is not endorsed or maintained by ZCode or Z.ai.
 
 Both archives are verified against SHA-256 values pinned in the plugin and extracted to the daemon user's data directory:
 
@@ -59,7 +59,7 @@ API keys are sent to ZCode, which stores them as Desktop does, and are never sho
 
 ### Coding Plan usage
 
-On Paseo 0.11 and later, Paseo's **Usage** screen and sidebar usage summary show a **ZCode** card for the signed-in account's Individual Coding Plan (Z.ai or BigModel). It lists the 5-hour, weekly, monthly tool-call and ZCode MCP quotas with their reset times, as ZCode Desktop does. The plugin asks ZCode's official usage service for this plan only, on the same ZCode Server as the Account tab. The service never uses an API key from the environment. Team Plan and Start Plan are not shown. Paseo 0.11.0-beta.5 does not yet show usage in a ZCode agent's popover.
+On Paseo 0.11 and later, Paseo's **Usage** screen and sidebar usage summary show a **ZCode** card for the signed-in account's Individual Coding Plan (Z.ai or BigModel). It lists the 5-hour, weekly, monthly tool-call and ZCode MCP quotas with their reset times, as ZCode Desktop does. The plugin asks ZCode's official usage service for this plan only, on the same ZCode Server as the Account tab. The service never uses an API key from the environment. Team Plan and Start Plan are not shown. Paseo 0.12.0 does not yet show usage in a ZCode agent's popover.
 
 ### Using your own runtime
 
@@ -74,11 +74,11 @@ export PASEO_ZCODE_NODE=/absolute/path/to/node       # ordinary Node.js 24.14.0 
 
 Session environment variables are forwarded, subject to ZCode's own proxy, certificate and runtime environment handling.
 
-The source baseline is `29628c9acdb81b703bbd4080c207a0e7ce5e276e` (ZCode `v3.14.3`). The managed runtime passed the stdio runtime contract on all five managed platforms in CI. See the [verification record](docs/verification.md) for exact coverage.
+The source baseline is `3c5b227649371507ddc4eb46ac5133afe6db1cab` (ZCode 3.16.2, an untagged upstream `main` commit; see ADR 20). The managed runtime passed the stdio runtime contract on all five managed platforms in CI. See the [verification record](docs/verification.md) for exact coverage.
 
 ## Behavior
 
-- Models and reasoning options come from ZCode. Editing modes are `build`, `edit`, and `yolo`; `settings.plan_mode` is independent.
+- Models and reasoning options come from ZCode. Editing modes are `build`, `edit`, `guarded` and `yolo`; `settings.plan_mode` is independent. `guarded` (ZCode's Autonomous mode, Server 3.15.1 or later) runs tools without approval but asks once, each time, before a command that ZCode's safety rules consider risky; it is not offered on older runtimes.
 - Text, thoughts, tools, subagent progress, usage and history use V4 snapshots and deltas. Tool output is marked when ZCode truncates it. Usage is cumulative; repeated snapshots do not add it again.
 - Text submitted during generation uses native guidance. Attachments use the native queue. Paseo reports one run across these native turns and completes it only after all accepted input has been consumed and foreground work has ended.
 - Acceptance is reported once, after the native acknowledgement. Unknown delivery results are never automatically resent. Stop identifies the current native execution, disables automatic queue execution and removes pending input. A new explicit run enables the queue again.
@@ -86,7 +86,7 @@ The source baseline is `29628c9acdb81b703bbd4080c207a0e7ce5e276e` (ZCode `v3.14.
 - Native permission IDs, option values, questions and Plan approval retain their meanings. Question auto-resolution is disabled for each owned Server. Workspace hook trust is reviewed through the official CLI; it is not represented as “allow once.”
 - Each session owns its Server process and environment. Metadata requests use temporary Servers. Closing stdin gives ZCode time to clean up before process termination.
 
-The plugin uses ZCode's own skills, MCP configuration and tools. Browser Use and Computer Use cannot run in the plugin's ZCode, even when ZCode Desktop has them enabled: the Computer Use helper accepts only the signed Desktop app, and only Desktop provides browsers. The plugin therefore hides them from the model (ADR 19); Desktop is not affected. Generic rewind, independent Paseo child agents, hook-review UI and Goal/Workflow controls are outside this migration. `prompt.output_schema`, custom system prompts and `persist:false` are unsupported. MCP `alwaysLoad` is unsupported; stdio MCP commands must be absolute paths. Provider options are unsupported: in Paseo 0.11 and later, `agents.providers.zcode.options` in Paseo's `config.json` makes sessions fail with `INVALID_CONFIGURATION`, and the `command` and `env` overrides there are not applied. Paseo does not show context usage reported before the first turn, and the plugin adds no substitute display; Coding Plan quota appears in Paseo 0.11's Usage screen (see [Coding Plan usage](#coding-plan-usage)).
+The plugin uses ZCode's own skills, MCP configuration and tools. Browser Use and Computer Use cannot run in the plugin's ZCode, even when ZCode Desktop has them enabled: the Computer Use helper accepts only the signed Desktop app, and only Desktop provides browsers. ZCode's Visualize (interactive views in the conversation) renders only in Desktop. The plugin therefore hides all three from the model (ADR 19, ADR 21); Desktop is not affected. Generic rewind, independent Paseo child agents, hook-review UI and Goal/Workflow controls are outside this migration. `prompt.output_schema`, custom system prompts and `persist:false` are unsupported. MCP `alwaysLoad` is unsupported; stdio MCP commands must be absolute paths. Provider options are unsupported: in Paseo 0.11 and later, `agents.providers.zcode.options` in Paseo's `config.json` makes sessions fail with `INVALID_CONFIGURATION`, and the `command` and `env` overrides there are not applied. Paseo does not show context usage reported before the first turn, and the plugin adds no substitute display; Coding Plan quota appears in Paseo 0.11's Usage screen (see [Coding Plan usage](#coding-plan-usage)).
 
 ## Persistence
 
@@ -94,7 +94,7 @@ New handles use **version 3**. Versions 1 and 2 are rejected without migration o
 
 Unsent conversations are deferred drafts. Before the first prompt, the plugin atomically saves the logical-to-native ID mapping under `$XDG_STATE_HOME/paseo-plugin-zcode-provider/sessions-v3`, or `~/.local/state/paseo-plugin-zcode-provider/sessions-v3`. It stores identifiers and workspace paths, not message bodies. Preserve this directory for backup. A mapping write failure prevents sending. Corrupt mappings and missing native conversations fail explicitly; no replacement conversation is created.
 
-New conversations support listing, resume and paged V4 history. Mode/Plan restoration requires both `mode` and `settings.plan_mode` saved by Paseo. The plugin applies them after native restore and confirms the resulting state before reporting the session ready. Omitted settings retain whatever ZCode returns, which can be stale on the pinned source; restoration of those values is not guaranteed. There is no private Plan restoration store. [ADR 14](docs/adr/0014-paseoの保存設定を再適用する復元を保証範囲とする.md) limits the guarantee to this supported path; settings-free restoration is checked separately with `npm run test:native-restore`. Existing ZCode databases may be migrated by ZCode itself on startup; the native tests isolate the home, configuration and database.
+New conversations support listing, resume and paged V4 history. From ZCode 3.16, archiving belongs to Desktop's task list, so the listing also contains conversations archived in Desktop. Mode/Plan restoration requires both `mode` and `settings.plan_mode` saved by Paseo. The plugin applies them after native restore and confirms the resulting state before reporting the session ready. Omitted settings retain whatever ZCode returns, which can be stale on the pinned source; restoration of those values is not guaranteed. There is no private Plan restoration store. [ADR 14](docs/adr/0014-paseoの保存設定を再適用する復元を保証範囲とする.md) limits the guarantee to this supported path; settings-free restoration is checked separately with `npm run test:native-restore`. Existing ZCode databases may be migrated by ZCode itself on startup; the native tests isolate the home, configuration and database.
 
 ## Diagnostics
 

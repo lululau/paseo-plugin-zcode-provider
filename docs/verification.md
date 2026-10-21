@@ -1,3 +1,73 @@
+# ZCode 3.16.2 への追従（2026-10-21）
+
+[Issue #64](https://github.com/supermomonga/paseo-plugin-zcode-provider/issues/64)（3.16.2）の対応。変更履歴だけを確認済みだった #53（3.14.5）、#56（3.15.1）、#57（3.15.3）も含める。ソース基準を `3c5b227649371507ddc4eb46ac5133afe6db1cab`（3.16.2）に進め、パッチ済みランタイム `3.16.2-paseo.1` を公開して固定する。タグの無いコミットを基準にする判断は [ADR 20](adr/0020-タグの無い上流の同期コミットをpackage-versionで特定してzcodeのソース基準にする.md) に記録した。
+
+## 上流のソース
+
+- `git ls-remote https://github.com/zai-org/ZCode.git 'refs/tags/*' 'refs/heads/*'`：`main` = `3c5b227649371507ddc4eb46ac5133afe6db1cab`、`feat/ui-plugin` = `662c30b`、タグは `v3.14.3`（`29628c9`）と `v3.15.1`（`aac4755`）だけ。GitHub Release は `v3.14.3` だけ。
+- `main` の履歴は `29628c9`（3.14.3）→ `aac4755`（3.15.1、`feat: update to v3.15.1`）→ `0a1fc56`（3.16.1、`chore: sync ZCode source`、2026-10-19）→ `3c5b227`（3.16.2、同、2026-10-20）。各コミットのルート `package.json` の `version` を `git show` で確かめた。3.16.2 を持つコミットは `3c5b227` だけである。3.14.4、3.14.5、3.15.3 に対応するソースは無い。
+
+## 変更履歴とこのプロバイダ
+
+- **Autonomous mode（3.15.1、`guarded`）**：通常は Full access と同じで、ZCode の危険コマンド規則（`core/src/tool/handlers/guarded/`）に当たる Bash だけ、実行ごとに 1 回限りの承認を求める（`approvalMode: "user-once"`、選択肢は許可と拒否だけ）。Plan が ON なら Plan が優先する。Paseo のモードに `guarded`（「Autonomous」）を加えた。3.15.1 未満の Server は受け付けないので、カタログ・セッション設定・検証は Server の版で切り替える（`server/mapping.ts` の `zcodeModes`）。3.16.2 の Desktop のメニューは build / guarded / plan / yolo で、`edit` は表示しないが値としては有効なので残す。承認要求の提示は既存の対応表のままで扱える。
+- **Visualize（3.15.1）**：会話内の対話的な表示。可視化用ディレクトリは Desktop の surface の Agent にだけ渡り、プロバイダの Agent（terminal surface）には渡らない。それでもスキルは提示される。[ADR 21](adr/0021-desktop専用のvisualizeプラグインもadr-19の抑止対象に加える.md) で ADR 19 の抑止対象に加えた。
+- **MCP App（3.15.1）**：V4 の差分に表示専用の `pluginUi.*` が 4 種増えた。新しい vendored の `apply.ts` は何もしない。旧い vendored の `conversationDeltaSchema` はこれを拒むので、vendored の更新はランタイムの更新と同時に必要だった。
+- **サインイン（3.15.3 の「プラン接続が失敗する」修正の周辺）**：`setting.update` が、接続の選択（`providerFamilyConnectionSelections`）を書くときに、呼び出し側が読んだ設定を第 2 引数（CAS）として要求するようになった（`packages/services/src/setting/settingService.ts`、`aac4755` には無い）。プロバイダの Account タブはサインイン完了時に 1 引数で呼んでいたため、3.16 では「Signed in, but ZCode could not switch to the account.」で失敗する。Desktop の `setProviderFamilyDomain` と同じく、読んだ `providerFamilyDomain`、`providerFamilyConnectionSelections`、`providerFamilyDomainUpdatedAt` を渡すようにした。3.14.3 もこの引数を受け付ける。試験の模擬 Server はこの検査を再現し、修正前のコードでは既存のサインイン試験 2 件が失敗する。
+- **履歴のアーカイブ（3.16.2）**：アーカイブはサービス側のタスク索引に移り（`zcodeTaskService.archiveTask`）、CLI の `session/list` から `includeArchived` とアーカイブの除外が無くなった。プロバイダの `includeArchived: false` は無視され、Desktop でアーカイブした会話も Paseo の一覧に出る。README に記した。
+- **Tool search（3.16.2）**：既定は無効（`toolSearchMode: "off"`）。有効にしても、検索の対象はターンごとの `toolDisallowlist` で絞った後の一覧なので、`mcp__node_repl__js` は出ない。
+- **プラグインマーケット（3.16.2）**：マーケットから入れたプラグインは source が `cache` で ID も異なり、パッチの判定（`official` だけ）に掛からない。公式プラグインの ID、`resolveOfficialPluginRoots`、`ZCODE_CUA_PRODUCT_HELPER` の扱いは変わっていない。
+- **起動時の保存領域の移行**：stdio Server は hello-ack の後、RPC サーバーを作る前に `migrateApplicationStorage`（タスク索引・自動化・オフピークの SQLite 移行）を待つ。大きな共有データで最初に起動すると、プロバイダの `helloConversationV4` の 10 秒の期限に掛かる可能性がある（未確認）。Desktop 3.16.2 がすでに移行していれば、ほぼ何もしない。
+- **その他の契約**：stdio の hello / hello-ack、V4 のコマンド（`sendText` は任意項目の追加だけ）、`toolDisallowlist`（開始・ガイダンス・キューのすべて）、`stop`、`resolveInteraction`、`switchModelConfig`、`oauth`、`provider-settings`、`usage-stats.getEntitlementSnapshot` に、プロバイダが使う範囲の互換性を壊す変更は無い。`historyFirst` は宣言した接続にだけ効き、プロバイダは宣言しない。
+
+## ビルドと vendored ソース
+
+- `scripts/sync-zcode-source.mjs` は、`packages/shared` の `#src/*`（`package.json` の `imports`）を相対パスに直すようにした。`source-server/contracts.ts` が型 import で使う。同期は 124 ファイル（追加 27、変更 40）。型エラーは無かった。
+- 公式の `scripts/builtin-provider-config.mjs` は 3.15.1 から、`ZCODE_ENV=production` が無いと `config/provider/zcode-builtin.test.json` を埋め込む（`.env*` にも指定は無い）。3.14.3 は常に本番用だった。リリース用ワークフローのビルドに `ZCODE_ENV=production` を指定し、`scripts/package-zcode-runtime.mjs` が `agent/provider/zcode-builtin.json` とソースの本番用ファイルの一致を確かめて、違えば失敗するようにした。
+- ADR 19 のパッチは無修正で当たる。ヘッダーの対象コミットを書き換えたので、SHA-256 は `5bfa90d59fd7d3dba8fbd6c865fd8cb4f7a45f03f7fa766d97dfd4ed87578f2a` になった。
+
+## 検証（macOS arm64、2026-10-21）
+
+- **自動試験（Node.js 26.9.0）**：`npm run typecheck`、`npm test`（22 ファイル、205 tests）、`npm run build`、`npm run format:check`、`npm run check:zcode-source`（124 ファイル）、`npm run check:zcode-patches` が成功した。
+- **ローカルビルド**：別の作業ディレクトリに `3c5b227` を取得し、`scripts/apply-zcode-patches.mjs` でパッチを当て、Node.js 24.20.0、pnpm 10.33.2、`ZCODE_ENV=production` で公式手順どおりにビルドした。公式アーカイブ `c147601d53dd61485d1ab77fa108fcc2f29c58e5cbf6b41baec971e363a5cf0a`。`package-zcode-runtime.mjs` が本番用の provider 設定を確かめて `3.16.2-paseo.0`（`661c1aec1dd76dd6c79a53a30726a7a33367b72cb5e4899f1d3dc126ac925829`、86,665,099 bytes）を作った。この成果物は公開しない。Server 3.16.2、Agent 0.17.0。
+- **`test:stdio-runtime`**：このローカルビルド（override）で、既存の全項目、guarded（通常の Bash は承認なし、`rm -r` は許可・拒否だけの承認要求、拒否後に対象が残りターンが完了）、「隠れる」側の ADR 19（visualize の模擬キャッシュを含む）が通った。新しい vendored コードで、現在固定している 3.14.3-paseo.1（一時 `XDG_DATA_HOME` に `setup:managed-runtime` で導入）も全項目と「隠れる」側を通り、カタログに guarded は出なかった。無改変の 3.14.3（override）は「見えたまま」側を通った。
+- **`test:native-restore`**：3.16.2 でも失敗した（期待 `edit` + Plan ON に対し、`yolo` + Plan OFF）。保証範囲外の上流の不具合は残る（ADR 14）。
+- **`test:usage-runtime`**：このローカルビルドと利用者の実データ（Desktop 3.16.2 のサインイン）で、`status()` が available、アカウント 1 件、`GLM Coding Max` の 4 つの枠を返し、Paseo のスキーマを通った。
+
+## 公開と固定
+
+| 項目               | 実測値                                                                                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| リリース           | [`zcode-runtime-v3.16.2-paseo.1`](https://github.com/supermomonga/paseo-plugin-zcode-provider/releases/tag/zcode-runtime-v3.16.2-paseo.1)（PR #65 の `f781642`）、`zcode-runtime-3.16.2-paseo.1.tar.gz`、82,516,181 bytes |
+| 成果物 SHA-256     | `01f3ee802f4c0b24c4023e366485120416a6acc92ec899a9edf7f2fc76eaa17d`。`gh attestation verify` で、タグ `zcode-runtime-v3.16.2-paseo.1` のリリース用ワークフローによる署名（ソース `f781642`）を確認                         |
+| `BUILD-INFO.json`  | `release: 3.16.2-paseo.1`、ソース `3c5b227`（3.16.2）、`modified: true`、パッチ `5bfa90d…`。同梱のパッチはリポジトリのものとバイト単位で一致。`agent/provider/zcode-builtin.json` は本番用ファイルと一致                  |
+| 公式ビルドの成果物 | `dea514198788941513d1fc60d7a797f19855286898577a9389235ce7ce76fcf4`（Node.js 24.21.0、[run 39586477395](https://github.com/supermomonga/paseo-plugin-zcode-provider/actions/runs/39586477395)）                            |
+
+- **PR #65 の CI**：[run 39585419092](https://github.com/supermomonga/paseo-plugin-zcode-provider/actions/runs/39585419092) で、test（`test:upstream` を含む）、固定前の 3.14.3-paseo.1 での 5 プラットフォームの契約試験、実モデル E2E が成功した。リリース用ワークフローは PR 上でパッチ済み 3.16.2 を作り（[run 39585419524](https://github.com/supermomonga/paseo-plugin-zcode-provider/actions/runs/39585419524)、未公開）、5 プラットフォームで guarded と「隠れる」側の ADR 19 を含む契約試験が通った。
+- **タグのリリース**：run 39586477395 で、ビルド、5 プラットフォームの検証、署名、公開（latest ではない）が成功した。
+- **導入**：`pins.ts` を更新した状態で、一時 `XDG_DATA_HOME` の `npm run setup:managed-runtime` が公開版を取得・検証して導入した。その管理下ランタイムで `test:stdio-runtime` が全項目、guarded、「隠れる」側を通った（`source: managed`、Server 3.16.2、Agent 0.17.0）。
+
+- **固定後の CI**：[run 39587824143](https://github.com/supermomonga/paseo-plugin-zcode-provider/actions/runs/39587824143) で、5 プラットフォームの管理下ランタイム契約試験が公開版（`source: managed`、Server 3.16.2）で guarded と「隠れる」側を含めて通った。実モデル E2E も公開版（`zcode-3.16.2-01f3ee802f4c`）で、モデルと推論レベル、独立した Plan と承認・拒否、Plan とモデルの復元、ガイダンス、添付キュー、単一完了が passed だった。
+
+未検証：Account タブでの実際のサインイン（CAS の修正は模擬 Server で確認）、大きな共有データでの初回起動時間、Paseo daemon の実 UI。既存の利用者は、固定値が変わったので Runtime タブから導入し直す。
+
+# Paseo 0.12.0 への追従（2026-10-21）
+
+Paseo の追従 Issue 9 件（#46、#47、#54、#58〜#63。0.11.0〜0.12.0）をまとめて扱った。開発用 SDK 3 パッケージ（`@getpaseo/plugin`・`client`・`protocol`）を `0.12.0` に固定し、CI の上流 checkout を同タグの `cafe4b01c8522ff39560241c5deb01427dc8dc5b` に更新した。lockfile で変わったのは推移依存の `@getpaseo/relay` を含む `@getpaseo/*` の 4 項目だけである。`@getpaseo/plugin@0.12.0` は `client`・`protocol` を同じ版に固定するので、3 パッケージは同時に上げる。Provider 実装・保存形式・manifest の最低要件 `>=0.8.0` は変えていない。
+
+上流の差分は `git diff v0.11.0-beta.5 v0.12.0` の `packages/plugin`、`packages/server/src/server/agent/plugin-provider.ts`、`packages/server/src/server/plugins/`、usage source の registry を読んで確認した。
+
+- **公開 SDK**：`packages/plugin/src` の試験以外の変更は、任意の `ProviderRegistration.requiresConfiguration`、ACP 専用の `AcpOptions.workspaceOnlyCatalog`、ACP 接続の内部だけである。`PROVIDER_CAPABILITIES`、Provider の入力・イベント、client・設定画面・RPC の API は変わっていない。`requiresConfiguration` は `agents.providers` に設定が無い限り Provider を隠すので採用しない。usage source の型（`packages/plugin/src/server/usage.ts`）は 0.11.0-beta.5 から差分が無い。
+- **ステアリング（#7270、#5164）**：`PluginAgentSession.steerActiveTurn` は、`prompt.steer` を交渉した Provider にだけステアリングを渡すようになった（`plugin-provider.ts:1178`）。このプラグインは宣言・交渉済みなので影響しない。CLI・MCP からエージェント間で送るメッセージも、既定で実行中のターンへのステアリングとして同じ経路に入る。ZCode に実行中のターンが無ければ `unavailable` を返し、Paseo が新しいターンを始める。`clearPendingPermissions` を付けるのは従来どおり Web UI の経路だけである。
+- **最初のプロンプトの失敗（#6379）**：作成直後のターンが拒否されると、下書きに戻さず、エージェントにターンのエラーを表示するようになった。プラグインが返すエラーは従来どおり固定文言で、変更は要らない。
+- **usage（#7246、#6947、#6474）**：registry が最後に成功した値を保持し、`discover()` が例外を投げたときは前回の探索結果を使うようになった。`UsageReportSchema`、5 分のキャッシュ、20 秒の期限は変わらない。`fetch()` が `status: "error"` を返すと、最後に成功した値とともに表示される。新しい `paseo usage` も同じ registry を読む。このプラグインの `discover()` は失敗を空の一覧として返すため、探索に失敗したときは前回の結果が保持されず、カードは従来どおり消える。
+- **エージェント単位の利用量と初期 usage**：`PluginAgentSession` には 0.12.0 でも `usageSession()` が無く、AgentManager にも usage の変更が無い。どちらの制約も残る（[todo](todo.md)）。
+- **プラグインの導入元（0.11.0）**：`github:` などの接頭辞が無い `owner/repo` は、常に Paseo のプラグイン registry（`https://plugins.paseo.sh`）で解決されるようになった（`managed-source.ts` の `parsePluginRegistryReference`）。0.11.0-beta.5 までは `registryOptions.enabled` が条件だった。このプラグインは registry に無い（`/plugins/supermomonga/paseo-plugin-zcode-provider.json` は 404）ため、README の `paseo plugin add supermomonga/paseo-plugin-zcode-provider` は 0.11.0 以降で失敗する。0.9.0 以降のすべての版で Git として解決される `github:supermomonga/paseo-plugin-zcode-provider` に改めた。npm 形式の手順は影響しない。
+- **その他**：`providers.waitForReady`（#6760）は使っていない（`providers.refresh` のみ）。`@getpaseo/protocol` の型 import の修正（#7023）は、本番コードがその型を import しないので関係しない。保存 mode の検証（#5847）と xhigh の表示名（#6005）はアプリ側の修正である。アーカイブ済みエージェントの修正（#6766）は ACP Provider だけに及ぶ。0.11.1〜0.11.4 に SDK の変更は無い。
+- **自動試験（macOS arm64、Node.js 26.9.0）**：`npm run typecheck`、`npm test`（22 ファイル、201 tests）、`npm run build`、`npm run format:check` が成功した。`npm run check:paseo-releases -- --dry-run` は `No Paseo release newer than 0.12.0` を返した。
+- **Paseo の実 compiler / adapter**：`v0.12.0` の checkout に対する `npm run test:upstream` は、Git 準備（`NODE_ENV` 未設定 / production）、npm インストール、登録、usage source の登録、V4 タイムライン、ステアリング、添付キュー、単一完了、Provider 差し替え、再開、Plan 設定の再開、停止、`status()` がすべて passed だった。ハーネスが使う上流ファイルと、`which@5.0.0` を含む依存は変わっていない。
+
+未検証：0.12.0 の実 daemon と実 UI での導入・セッション、実行中の ZCode ターンへの `paseo send --steer`、`github:` 形式での実際の Git 導入、0.11.x と最低要件 0.8.0 に対する `test:upstream`。
+
 # ZCode 3.14.5 の確認（2026-10-11）
 
 [Issue #53](https://github.com/supermomonga/paseo-plugin-zcode-provider/issues/53) の調査。確認済み変更履歴を 3.14.5 に進めるが、ソース基準、最低対応版、管理下ランタイムの固定値は変更しない。**管理下ランタイムは ADR 19 のパッチ済み 3.14.3-paseo.1 を維持する。3.14.5 の互換性を実証したという意味ではない。**
