@@ -291,6 +291,40 @@ it.each([
     expect(f.host.calls).toEqual([]);
   },
 );
+it("opens a session whose stored plan mode lives in providerOptions", async () => {
+  const f = await fixture();
+  // Paseo 0.16 stores the composer values in `providerOptions`; a stored
+  // `plan_mode` used to fail the open as an unrecognized key.
+  expect(await f.open({ providerOptions: { plan_mode: false } })).toMatchObject(
+    { type: "session.ready" },
+  );
+  expect(
+    f.events.filter((e) => e.type === "session.config").at(-1),
+  ).toMatchObject({
+    config: { providerOptions: { plan_mode: false } },
+  });
+});
+it("applies a plan mode carried only by providerOptions", async () => {
+  const f = await fixture();
+  expect(await f.open({ providerOptions: { plan_mode: true } })).toMatchObject({
+    type: "session.ready",
+  });
+  expect(f.host.state.config.planEnabled).toBe(true);
+});
+it("applies a plan mode patch carried only by providerOptions", async () => {
+  const f = await fixture();
+  await f.open();
+  await f.send({
+    type: "session.configure",
+    sessionId: "public",
+    requestId: "plan-options",
+    changes: { providerOptions: { plan_mode: true } },
+  });
+  await f.wait(
+    (e) => e.type === "request.completed" && e.requestId === "plan-options",
+  );
+  expect(f.host.state.config.planEnabled).toBe(true);
+});
 it("reports cumulative usage without adding repeated snapshots", async () => {
   const f = await fixture();
   await f.open();
